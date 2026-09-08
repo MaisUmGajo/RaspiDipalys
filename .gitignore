@@ -1,0 +1,24 @@
+# Live/generated config that must never be committed — only the *.example
+# templates belong in the repo. These files are created at install time on
+# the actual server/Pi and can contain real camera credentials, host names,
+# or the web UI password hash.
+**/cameras-4k.conf
+**/cameras-1080p.conf
+**/pi.env
+**/videowall-server.env
+**/videowall.env
+**/wall-4k.env
+**/wall-1080p.env
+**/webui.env
+
+# But always keep the templates.
+!**/*.example
+
+# Python / editor cruft
+__pycache__/
+*.pyc
+.venv/
+.idea/
+.vscode/
+*.swp
+.DS_Store

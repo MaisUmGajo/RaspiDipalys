@@ -1,0 +1,8 @@
+# Installed as ~videowall/.bash_profile.
+# Console autologin (see systemd getty@tty1 override in install.sh) drops
+# the "videowall" user straight into a shell on tty1; this starts the X
+# server automatically. If X ever crashes, agetty respawns the login and
+# this fires again, so the wall recovers without manual intervention.
+if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+  exec startx -- -nolisten tcp vt1
+fi

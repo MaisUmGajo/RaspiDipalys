@@ -1,0 +1,17 @@
+[Unit]
+Description=Video wall web UI (config + status)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videowall-web
+Group=videowall
+WorkingDirectory=/opt/videowall/webui
+# GUNICORN_BIN is substituted by install.sh (name varies: gunicorn vs gunicorn3).
+ExecStart=GUNICORN_BIN --workers 2 --bind 0.0.0.0:8080 app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

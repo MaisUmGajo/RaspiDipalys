@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Pi Dashboard</h1>
+
+<section class="cards">
+  <div class="card"><div class="card-label">CPU</div><div class="card-value" id="stat-cpu">–</div></div>
+  <div class="card"><div class="card-label">Memory</div><div class="card-value" id="stat-mem">–</div></div>
+  <div class="card"><div class="card-label">Load avg</div><div class="card-value" id="stat-load">–</div></div>
+  <div class="card"><div class="card-label">Temp</div><div class="card-value" id="stat-temp">–</div></div>
+  <div class="card"><div class="card-label">Uptime</div><div class="card-value" id="stat-uptime">–</div></div>
+</section>
+
+<h2>Displays</h2>
+<p class="note">Source server: <strong id="server-host">–</strong></p>
+<div id="walls"></div>
+
+<p class="note">Refreshes every 3s. "Displaying" means an mpv process is
+currently running for that screen's stream — it does not by itself prove the
+server is reachable; use the <a href="{{ url_for('config') }}">Config &amp;
+test</a> page to probe a source.</p>
+
+<script>
+async function refresh() {
+  let res;
+  try { res = await fetch("/api/status"); } catch (e) { return; }
+  if (!res.ok) return;
+  const data = await res.json();
+
+  const s = data.pi;
+  document.getElementById("stat-cpu").textContent = s.cpu_percent.toFixed(0) + "%";
+  document.getElementById("stat-mem").textContent = s.mem_percent.toFixed(0) + "%";
+  document.getElementById("stat-load").textContent = s.load_avg.map(x => x.toFixed(2)).join(" / ");
+  document.getElementById("stat-temp").textContent = s.temp_c !== null ? s.temp_c + "°C" : "n/a";
+  const h = Math.floor(s.uptime_s / 3600);
+  const d = Math.floor(h / 24);
+  document.getElementById("stat-uptime").textContent = d > 0 ? d + "d " + (h % 24) + "h" : h + "h";
+
+  document.getElementById("server-host").textContent = data.server_host || "(not set)";
+
+  const wallsEl = document.getElementById("walls");
+  wallsEl.innerHTML = "";
+  for (const w of data.walls) {
+    const div = document.createElement("div");
+    div.className = "wall-card " + (w.displaying ? "state-good" : "state-warn");
+    div.innerHTML = `
+      <h3>${w.label}</h3>
+      <div class="wall-row"><span>SRT port</span><span>${w.port}</span></div>
+      <div class="wall-row"><span>Status</span><span>${w.displaying ? "displaying" : "not running"}</span></div>
+    `;
+    wallsEl.appendChild(div);
+  }
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+{% endblock %}

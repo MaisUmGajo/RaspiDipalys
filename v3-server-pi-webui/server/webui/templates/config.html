@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Config</h1>
+
+{% if saved %}
+<p class="flash-ok">Saved — {{ saved }} encoder{{ "s" if saved == "global" else "" }} restarted.</p>
+{% endif %}
+{% if errors %}
+<ul class="flash-errors">
+  {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+{% for wall, meta in walls.items() %}
+<h2>{{ meta.label }}</h2>
+<form method="post">
+  <input type="hidden" name="form" value="{{ wall }}">
+  <div class="grid-2">
+    <label>Rows <input type="number" name="rows" min="1" value="{{ wall_data[wall].get('ROWS', '') }}" required></label>
+    <label>Columns <input type="number" name="cols" min="1" value="{{ wall_data[wall].get('COLS', '') }}" required></label>
+    <label>Canvas width <input type="number" name="canvas_w" min="2" value="{{ wall_data[wall].get('CANVAS_W', '') }}" required></label>
+    <label>Canvas height <input type="number" name="canvas_h" min="2" value="{{ wall_data[wall].get('CANVAS_H', '') }}" required></label>
+    <label>SRT port <input type="number" name="port" min="1" max="65535" value="{{ wall_data[wall].get('PORT', '') }}" required></label>
+    <label>Bitrate (kbps) <input type="number" name="bitrate_kbps" min="100" value="{{ wall_data[wall].get('BITRATE_KBPS', '') }}" required></label>
+    <label>FPS <input type="number" name="fps" min="1" max="60" value="{{ wall_data[wall].get('FPS', '') }}" required></label>
+  </div>
+  <label>Camera RTSP URLs (one per line, row-major order — must be rows × columns)
+    <textarea name="cameras" rows="6" spellcheck="false">{{ camera_data[wall]|join("\n") }}</textarea>
+  </label>
+  <button type="submit">Save &amp; restart {{ meta.label }} encoder</button>
+</form>
+{% endfor %}
+
+<h2>Global</h2>
+<form method="post">
+  <input type="hidden" name="form" value="global">
+  <div class="grid-2">
+    <label>RTSP transport
+      <select name="rtsp_transport">
+        <option value="tcp" {{ "selected" if global_data.get("RTSP_TRANSPORT", "tcp") == "tcp" }}>tcp</option>
+        <option value="udp" {{ "selected" if global_data.get("RTSP_TRANSPORT") == "udp" }}>udp</option>
+      </select>
+    </label>
+    <label>SRT latency (ms) <input type="number" name="srt_latency_ms" min="0" value="{{ global_data.get('SRT_LATENCY_MS', 400) }}" required></label>
+    <label class="checkbox"><input type="checkbox" name="vaapi" {{ "checked" if global_data.get("VAAPI") == "1" }}> Use VAAPI hardware encode</label>
+  </div>
+  <button type="submit">Save &amp; restart both encoders</button>
+</form>
+{% endblock %}

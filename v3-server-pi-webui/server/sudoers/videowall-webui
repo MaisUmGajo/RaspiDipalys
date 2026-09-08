@@ -1,0 +1,9 @@
+# Installed as /etc/sudoers.d/videowall-webui by install.sh.
+# Grants the web UI's service account (videowall-web) exactly the commands
+# it needs to apply config changes and report status — nothing else. No
+# wildcards: every allowed invocation is spelled out so this stays
+# auditable.
+videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl restart videowall-encode-4k.service
+videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl restart videowall-encode-1080p.service
+videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl show videowall-encode-4k.service
+videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl show videowall-encode-1080p.service

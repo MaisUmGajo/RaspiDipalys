@@ -1,0 +1,15 @@
+[Unit]
+Description=Video wall - 4K (3x3) composite encoder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videowall
+# rows=3 cols=3 canvas=3840x2160 srt-port=6000 bitrate=8000kbps
+ExecStart=/opt/videowall/bin/videowall-encode.sh /etc/videowall/cameras-4k.conf 3 3 3840 2160 6000 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

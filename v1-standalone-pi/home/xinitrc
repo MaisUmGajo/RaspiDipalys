@@ -1,0 +1,32 @@
+#!/bin/sh
+# Installed as ~videowall/.xinitrc — runs once the videowall user's X server
+# (two screens, :0.0 and :0.1) comes up.
+
+for scr in :0.0 :0.1; do
+  xset -display "$scr" s off
+  xset -display "$scr" -dpms
+  xset -display "$scr" s noblank
+done
+
+unclutter -idle 0.5 -root &
+
+# Each wall runs in its own restart loop: if the ffmpeg|mpv pipeline dies
+# (camera reboot, network blip, transient decoder error) it just comes back
+# a couple of seconds later instead of leaving that output blank/frozen.
+(
+  while true; do
+    DISPLAY=:0.0 /opt/videowall/bin/videowall-grid.sh \
+      /etc/videowall/cameras-4k.conf 3 3 3840 2160
+    sleep 2
+  done
+) &
+
+(
+  while true; do
+    DISPLAY=:0.1 /opt/videowall/bin/videowall-grid.sh \
+      /etc/videowall/cameras-1080p.conf 2 2 1920 1080
+    sleep 2
+  done
+) &
+
+wait

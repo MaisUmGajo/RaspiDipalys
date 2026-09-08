@@ -1,0 +1,15 @@
+# Video wall on the 1080p (HDMI1) output — 2x2 grid.
+# One RTSP URL per line, in row-major order:
+#   1 2
+#   3 4
+#
+# Exactly 4 non-comment lines are required.
+#
+# Get each URL from UniFi Protect: Camera -> Settings -> RTSP, enable the
+# "Low" quality alias for each camera, then paste the URL Protect shows you.
+#
+# Example (replace with your real cameras):
+# rtsp://192.168.1.10:7447/wxyz1111
+# rtsp://192.168.1.10:7447/wxyz2222
+# rtsp://192.168.1.10:7447/wxyz3333
+# rtsp://192.168.1.10:7447/wxyz4444

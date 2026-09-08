@@ -1,0 +1,6 @@
+# Installed as /etc/sudoers.d/videowall-pi-webui by install.sh.
+# The web UI's "Apply / restart displays" button works by killing the mpv
+# processes — the .xinitrc loops relaunch them within ~2s, re-reading
+# pi.env. This grants the web UI's service account (videowall-web) exactly
+# that one command as root and nothing else. Exact match, no wildcards.
+videowall-web ALL=(root) NOPASSWD: /usr/bin/pkill -x -u videowall mpv

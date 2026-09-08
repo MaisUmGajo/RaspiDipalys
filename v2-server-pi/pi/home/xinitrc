@@ -1,0 +1,46 @@
+#!/bin/sh
+# Installed as ~videowall/.xinitrc — runs once the videowall user's X server
+# (two screens, :0.0 and :0.1) comes up.
+#
+# No ffmpeg here: the server has already composited each wall into a single
+# stream, so the Pi's only job is decode-and-display, one mpv per screen.
+
+for scr in :0.0 :0.1; do
+  xset -display "$scr" s off
+  xset -display "$scr" -dpms
+  xset -display "$scr" s noblank
+done
+
+unclutter -idle 0.5 -root &
+
+ENV_FILE=/etc/videowall/pi.env
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+: "${SERVER_HOST:?SERVER_HOST must be set in /etc/videowall/pi.env}"
+PORT_4K="${PORT_4K:-6000}"
+PORT_1080P="${PORT_1080P:-6001}"
+SRT_LATENCY_MS="${SRT_LATENCY_MS:-200}"
+HWDEC="${HWDEC:-v4l2m2m-copy}"
+
+# Each wall runs in its own restart loop: if the connection to the server
+# drops (server restart, network blip) it just reconnects a couple of
+# seconds later instead of leaving that output frozen.
+(
+  while true; do
+    DISPLAY=:0.0 mpv --no-config --fullscreen --no-audio --really-quiet \
+      --hwdec="$HWDEC" --vo=gpu \
+      "srt://${SERVER_HOST}:${PORT_4K}?mode=caller&latency=${SRT_LATENCY_MS}"
+    sleep 2
+  done
+) &
+
+(
+  while true; do
+    DISPLAY=:0.1 mpv --no-config --fullscreen --no-audio --really-quiet \
+      --hwdec="$HWDEC" --vo=gpu \
+      "srt://${SERVER_HOST}:${PORT_1080P}?mode=caller&latency=${SRT_LATENCY_MS}"
+    sleep 2
+  done
+) &
+
+wait

@@ -1,0 +1,22 @@
+# Video wall on the 4K (HDMI0) output — 3x3 grid.
+# One RTSP URL per line, in row-major order (left-to-right, top-to-bottom):
+#   1 2 3
+#   4 5 6
+#   7 8 9
+#
+# Exactly 9 non-comment lines are required.
+#
+# Get each URL from UniFi Protect: Camera -> Settings -> RTSP, enable the
+# "Medium" quality alias for each camera, then paste the URL Protect shows you.
+# Typical form: rtsp://<protect-host>:7447/<alias>
+#
+# Example (replace with your real cameras):
+# rtsp://192.168.1.10:7447/abcd1234
+# rtsp://192.168.1.10:7447/abcd1235
+# rtsp://192.168.1.10:7447/abcd1236
+# rtsp://192.168.1.10:7447/abcd1237
+# rtsp://192.168.1.10:7447/abcd1238
+# rtsp://192.168.1.10:7447/abcd1239
+# rtsp://192.168.1.10:7447/abcd123a
+# rtsp://192.168.1.10:7447/abcd123b
+# rtsp://192.168.1.10:7447/abcd123c

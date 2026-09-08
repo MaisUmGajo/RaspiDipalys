@@ -1,0 +1,17 @@
+[Unit]
+Description=Video wall - 4K (3x3) composite encoder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videowall
+Group=videowall
+RuntimeDirectory=videowall
+RuntimeDirectoryMode=0755
+ExecStart=/opt/videowall/bin/videowall-encode.sh 4k
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

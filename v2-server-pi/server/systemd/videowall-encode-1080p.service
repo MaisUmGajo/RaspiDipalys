@@ -1,0 +1,15 @@
+[Unit]
+Description=Video wall - 1080p (2x2) composite encoder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videowall
+# rows=2 cols=2 canvas=1920x1080 srt-port=6001 bitrate=4000kbps
+ExecStart=/opt/videowall/bin/videowall-encode.sh /etc/videowall/cameras-1080p.conf 2 2 1920 1080 6001 4000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

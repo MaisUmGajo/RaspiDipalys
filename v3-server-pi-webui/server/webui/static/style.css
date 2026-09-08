@@ -1,0 +1,115 @@
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  margin: 0;
+  background: #12151a;
+  color: #e6e8eb;
+}
+nav {
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  background: #1a1e25;
+  border-bottom: 1px solid #2a2f38;
+}
+nav a {
+  color: #9db4ff;
+  text-decoration: none;
+}
+nav a:hover { text-decoration: underline; }
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+h1, h2, h3 { font-weight: 600; }
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.card {
+  background: #1a1e25;
+  border: 1px solid #2a2f38;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+.card-label { font-size: 0.8rem; color: #9aa3af; }
+.card-value { font-size: 1.4rem; font-weight: 600; }
+.wall-card {
+  background: #1a1e25;
+  border: 1px solid #2a2f38;
+  border-left: 4px solid #666;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.wall-card.state-good { border-left-color: #3ecf6b; }
+.wall-card.state-warn { border-left-color: #e2b93b; }
+.wall-card.state-bad  { border-left-color: #e2483b; }
+.wall-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.15rem 0;
+  font-size: 0.95rem;
+}
+.wall-row span:first-child { color: #9aa3af; }
+.note { color: #9aa3af; font-size: 0.85rem; }
+form {
+  background: #1a1e25;
+  border: 1px solid #2a2f38;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  color: #cfd3d9;
+}
+label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+input, select, textarea {
+  background: #12151a;
+  border: 1px solid #3a4049;
+  border-radius: 6px;
+  color: #e6e8eb;
+  padding: 0.4rem 0.5rem;
+  font-family: inherit;
+}
+textarea { font-family: ui-monospace, monospace; resize: vertical; margin-top: 0.5rem; }
+button {
+  background: #3b6fe0;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.55rem 1rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+button:hover { background: #2f5bc0; }
+.flash-ok {
+  background: #163a24;
+  border: 1px solid #3ecf6b;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+.flash-errors {
+  background: #3a1616;
+  border: 1px solid #e2483b;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem 0.5rem 1.5rem;
+}

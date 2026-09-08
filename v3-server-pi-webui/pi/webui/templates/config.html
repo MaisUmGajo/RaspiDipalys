@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Config &amp; test</h1>
+
+{% if saved == "save" %}
+<p class="flash-ok">Saved. Click "Apply" (or reboot) for the displays to pick up the change.</p>
+{% elif saved == "apply" %}
+<p class="flash-ok">Saved and displays restarted — they will reconnect with the new settings within a few seconds.</p>
+{% endif %}
+{% if errors %}
+<ul class="flash-errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+
+<h2>Source streams</h2>
+<p class="note">These are the two composited streams this Pi pulls from the
+server. Set the server address and per-wall ports, then <strong>test</strong>
+each source before applying — the test checks the address/port is reachable
+and that a live video stream is actually being published there.</p>
+
+<form method="post">
+  <label>Server host (Tailscale IP / MagicDNS name, or LAN IP)
+    <input type="text" name="server_host" id="f-host" value="{{ env.get('SERVER_HOST', '') }}" required>
+  </label>
+
+  {% for key, meta in streams.items() %}
+  <div class="stream-block">
+    <h3>{{ meta.label }}</h3>
+    <div class="inline-row">
+      <label>SRT port
+        <input type="number" name="{{ 'port_4k' if key == '4k' else 'port_1080p' }}"
+               id="f-port-{{ key }}" min="1" max="65535"
+               value="{{ env.get(meta.port_key, meta.default_port) }}" required>
+      </label>
+      <button type="button" class="secondary" onclick="testStream('{{ key }}')">Test this source</button>
+    </div>
+    <div class="test-result pending" id="result-{{ key }}" hidden></div>
+  </div>
+  {% endfor %}
+
+  <div class="grid-2">
+    <label>SRT latency (ms) — must match the server
+      <input type="number" name="srt_latency_ms" min="0" value="{{ env.get('SRT_LATENCY_MS', 400) }}" required>
+    </label>
+    <label>Hardware decode mode
+      <select name="hwdec">
+        {% set cur = env.get('HWDEC', 'v4l2m2m-copy') %}
+        <option value="v4l2m2m-copy" {{ 'selected' if cur == 'v4l2m2m-copy' }}>v4l2m2m-copy (safe default)</option>
+        <option value="v4l2m2m" {{ 'selected' if cur == 'v4l2m2m' }}>v4l2m2m (zero-copy, lower CPU)</option>
+        <option value="auto" {{ 'selected' if cur == 'auto' }}>auto</option>
+        <option value="no" {{ 'selected' if cur == 'no' }}>no (software decode)</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="inline-row">
+    <button type="submit" name="action" value="save">Save only</button>
+    <button type="submit" name="action" value="save_apply">Save &amp; apply (restart displays)</button>
+  </div>
+</form>
+
+<h2>Test an arbitrary source URL</h2>
+<p class="note">Optional: probe any <code>srt://</code>, <code>rtsp://</code>,
+<code>udp://</code> or <code>http(s)://</code> URL directly — handy for
+checking a camera's RTSP feed, or the server stream from here without saving.</p>
+<div class="stream-block">
+  <div class="inline-row">
+    <label style="flex:1; min-width:240px;">URL
+      <input type="text" id="f-rawurl" placeholder="rtsp://192.168.1.10:7447/abcd1234">
+    </label>
+    <button type="button" class="secondary" onclick="testRaw()">Test URL</button>
+  </div>
+  <div class="test-result pending" id="result-raw" hidden></div>
+</div>
+
+<script>
+function renderResult(el, data) {
+  el.hidden = false;
+  if (data.error && data.accessible === null) {
+    el.className = "test-result bad";
+    el.textContent = data.error;
+    return;
+  }
+  const acc = !!data.accessible, str = !!data.stream_detected;
+  el.className = "test-result " + (acc && str ? "ok" : (acc ? "warn" : "bad"));
+  let html =
+    `<span class="badge ${acc ? "yes" : "no"}">${acc ? "reachable" : "not reachable"}</span>` +
+    `<span class="badge ${str ? "yes" : "no"}">${str ? "stream detected" : "no stream"}</span>`;
+  if (data.details) {
+    const d = data.details;
+    html += `<div style="margin-top:.4rem">${d.codec || "?"} · ${d.width || "?"}×${d.height || "?"}` +
+            `${d.fps ? " · " + d.fps + " fps" : ""}${d.bitrate_kbps ? " · ~" + d.bitrate_kbps + " kbps" : ""}</div>`;
+  }
+  if (data.note) html += `<div style="margin-top:.4rem" class="note">${data.note}</div>`;
+  if (data.error && !data.details) html += `<div style="margin-top:.4rem" class="note">${data.error}</div>`;
+  el.innerHTML = html;
+}
+
+async function postTest(payload, el) {
+  el.hidden = false;
+  el.className = "test-result pending";
+  el.textContent = "Testing… (up to ~8s)";
+  try {
+    const res = await fetch("/api/test", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    renderResult(el, data);
+  } catch (e) {
+    el.className = "test-result bad";
+    el.textContent = "Test request failed: " + e;
+  }
+}
+
+function testStream(key) {
+  const host = document.getElementById("f-host").value.trim();
+  const port = document.getElementById("f-port-" + key).value.trim();
+  postTest({stream: key, host: host, port: port}, document.getElementById("result-" + key));
+}
+function testRaw() {
+  const url = document.getElementById("f-rawurl").value.trim();
+  postTest({url: url}, document.getElementById("result-raw"));
+}
+</script>
+{% endblock %}

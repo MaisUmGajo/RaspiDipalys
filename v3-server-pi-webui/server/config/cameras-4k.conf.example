@@ -1,0 +1,17 @@
+# Source cameras for the 4K/3x3 mosaic. One RTSP URL per line, row-major:
+#   1 2 3
+#   4 5 6
+#   7 8 9
+#
+# Exactly 9 non-comment lines required. Use the "Medium" quality RTSP alias
+# from UniFi Protect (Camera -> Settings -> RTSP) for each camera.
+#
+# rtsp://192.168.1.10:7447/abcd1234
+# rtsp://192.168.1.10:7447/abcd1235
+# rtsp://192.168.1.10:7447/abcd1236
+# rtsp://192.168.1.10:7447/abcd1237
+# rtsp://192.168.1.10:7447/abcd1238
+# rtsp://192.168.1.10:7447/abcd1239
+# rtsp://192.168.1.10:7447/abcd123a
+# rtsp://192.168.1.10:7447/abcd123b
+# rtsp://192.168.1.10:7447/abcd123c

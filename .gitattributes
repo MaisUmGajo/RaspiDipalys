@@ -1,0 +1,17 @@
+# These files are deployed on Linux (Debian / Raspberry Pi OS). Force LF line
+# endings in the repo and on checkout everywhere, so shell-script shebangs and
+# systemd/sudoers files never get CRLF (which would break them on Linux) even
+# when cloned on Windows.
+* text=auto eol=lf
+
+# Belt-and-braces for the executable/interpreted files specifically.
+*.sh    text eol=lf
+*.py    text eol=lf
+*.env   text eol=lf
+*.conf  text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.service text eol=lf
+*.append  text eol=lf
+xinitrc      text eol=lf
+bash_profile text eol=lf
