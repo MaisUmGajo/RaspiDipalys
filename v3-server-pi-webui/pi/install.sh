@@ -148,10 +148,12 @@ cat <<'EOF'
    otherwise mpv will just sit retrying the connection every 2s, which is
    harmless but you'll see a black screen until the server is up.
 
-3. Connect both monitors, reboot, and after first login as 'videowall'
-   confirm the DRM connector names with `DISPLAY=:0 xrandr` (see the
-   comment at the top of /etc/X11/xorg.conf.d/10-dualhead.conf) — update
-   the ZaphodHeads lines in that file if they don't say HDMI-1/HDMI-2.
+3. Connect both monitors and reboot. The config ships with the connector
+   names a Pi 4 on Bookworm reports (HDMI-A-1 / HDMI-A-2). If one screen
+   stays blank, log in as 'videowall', confirm the actual names with
+   `DISPLAY=:0 xrandr`, and update the ZaphodHeads lines in
+   /etc/X11/xorg.conf.d/10-dualhead.conf to match (older drivers may report
+   plain HDMI-1/HDMI-2).
 
 4. If a specific pixel resolution/refresh isn't being picked up
    automatically via EDID, force it via /boot/firmware/cmdline.txt, e.g.

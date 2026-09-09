@@ -91,9 +91,18 @@ else
 fi
 
 # Periodic machine-readable progress (frame/fps/bitrate/speed) for the web
-# UI to read. /run/videowall is created by systemd's RuntimeDirectory= so
-# this user doesn't need write access to /run itself.
-PROGRESS_FILE="/run/videowall/progress-${WALL}.txt"
+# UI to read. Under systemd, /run/videowall is created by RuntimeDirectory=
+# (owned by this service user). But /run is NOT writable by a normal user, so
+# if the dir is missing/unwritable — e.g. when running this script by hand for
+# debugging, outside systemd — fall back to a user-writable location. Without
+# this, ffmpeg's -progress would fail to open its file and the whole encode
+# would abort, not just lose the stats.
+RUN_DIR="/run/videowall"
+if ! mkdir -p "$RUN_DIR" 2>/dev/null || [ ! -w "$RUN_DIR" ]; then
+  RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/videowall"
+  mkdir -p "$RUN_DIR" 2>/dev/null
+fi
+PROGRESS_FILE="$RUN_DIR/progress-${WALL}.txt"
 
 exec ffmpeg "${FFMPEG_ARGS[@]}" \
   -filter_complex "$FILTER" -map "[out]" -an \
