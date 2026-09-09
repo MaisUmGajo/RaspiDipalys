@@ -1,0 +1,34 @@
+[Unit]
+# Templated unit: one instance per wall, where %i is the wall name (the slug
+# in /etc/videowall/wall-<slug>.env). Start a wall with:
+#   systemctl enable --now videowall-encode@4k.service
+# This replaces the old static videowall-encode-{4k,1080p}.service pair so the
+# server can run any number of walls without new unit files.
+Description=Video wall composite encoder (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=videowall
+Group=videowall
+# All instances share /run/videowall for their progress + snapshot files.
+# RuntimeDirectoryPreserve=yes is essential here: without it, systemd removes
+# the directory when ANY instance stops, pulling the runtime files out from
+# under the still-running instances (whose ffmpeg then writes to unlinked
+# inodes and silently disappears from the dashboard). The web UI restarts
+# services on every config save, so this would be hit constantly.
+RuntimeDirectory=videowall
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ExecStart=/opt/videowall/bin/videowall-encode.sh %i
+Restart=always
+RestartSec=5
+# The encode script exits 78 (EX_CONFIG) when a wall is disabled or its config
+# is invalid (missing settings, camera count != rows*cols). Without this, such
+# a wall would hot-loop every RestartSec forever; with it, it stops cleanly and
+# the failure is visible in the dashboard instead of buried in a restart storm.
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=multi-user.target
