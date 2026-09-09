@@ -1,218 +1,218 @@
-# Video Wall v3 — server + Pi + web UIs
+# Video Wall v3 — server + Pi clients + web UIs
 
-Builds on [`../v2-server-pi`](../v2-server-pi) (now archived) by adding a
-small web interface on **both** machines.
+Builds on [`../v2-server-pi`](../v2-server-pi) (archived). A Debian server
+composites camera feeds into mosaics and relays them; one or more Raspberry Pi
+clients display them, one wall per HDMI output. Both machines have a small web
+UI.
 
-**Server web UI** (`server/webui/`) — for:
+```
+cameras (RTSP) ─┐
+                ├─► videowall-encode@<wall>  ──RTSP (loopback)──► MediaMTX ──SRT──► Pi 1
+cameras (RTSP) ─┘   (one instance per wall)                          │              Pi 2 …
+                                                                     └── HTTP API ──► server web UI
+```
 
-- **Configuring** each wall's camera list, grid size, canvas resolution,
-  SRT port, bitrate and fps, plus the shared transport/latency/VAAPI
-  settings — without SSHing in and hand-editing files or systemd units.
-- **Runtime status**: server CPU/memory/temperature/uptime, each
-  encoder's systemd state and restart count, and live encode stats
-  (frame count, fps, bitrate, speed) read straight from ffmpeg.
-- **Client info, best-effort**: whether the Pi is actually connected and
-  pulling each stream. See the honesty note below — this is
-  connected/not-connected only, not per-client detail.
+## What this version adds over v2
 
-**Pi (client) web UI** (`pi/webui/`) — for:
+**Any number of walls, not a fixed pair.** A wall is just a
+`/etc/videowall/wall-<slug>.env` file plus a camera list. One templated systemd
+unit (`videowall-encode@.service`) runs them all, so adding a wall creates no
+new unit files. Walls can be **configured but not running** (`ENABLED=false`)
+— settings and camera list retained, service stopped and not started at boot.
 
-- **Configuring** the source streams: server host, the two SRT ports, SRT
-  latency and hardware-decode mode — without hand-editing `pi.env`.
-- **Testing a source before applying it**: a "Test this source" button
-  probes the address/port and reports whether it's reachable *and* whether
-  a live video stream is actually being published there (with detected
-  codec / resolution / fps / bitrate). Also tests arbitrary
-  srt/rtsp/udp/http URLs — handy for checking a camera feed directly.
-- **Runtime status**: Pi CPU/memory/temperature/uptime and whether each
-  screen's display process is currently running.
+**Multiple clients per wall,** via a MediaMTX relay. This is why the relay
+exists: a raw ffmpeg SRT listener accepts *exactly one* connection, so
+previously only one Pi could ever watch a wall. Encoders now publish once into
+MediaMTX, which fans each wall out to as many subscribers as you like, and they
+can reboot independently without disturbing the encoder or each other.
 
-The Pi's display path (dual-screen Xorg, autologin, mpv) is otherwise the
-same as v2 — the only change is that each display loop now re-reads
-`pi.env` on every reconnect, so the web UI can apply a config change by
-just restarting the mpv processes (no reboot).
+**No per-wall ports.** A wall is addressed by *name* on the relay, so every
+client reads from one shared SRT port:
 
-## What changed on the server vs v2
+```
+srt://<server>:8890?streamid=read:<wall>&latency=<ms>
+```
 
-`server/bin/videowall-encode.sh` used to take its grid size, canvas
-resolution, port and bitrate as positional arguments baked into each
-`videowall-encode-*.service` unit's `ExecStart` line — fine for a
-one-time setup, awkward for a web UI to edit safely (it would need to
-rewrite systemd units and reload the daemon on every change). Now each
-wall's settings live in their own file:
+**Server web UI** — create/edit/enable/disable/delete walls; live dashboard
+with server stats, per-encoder state, a mosaic snapshot, and per-camera
+diagnostics.
 
-- `/etc/videowall/wall-4k.env`, `/etc/videowall/wall-1080p.env` — rows,
-  cols, canvas size, port, bitrate, fps, and which camera list file to use.
-- `/etc/videowall/videowall-server.env` — shared settings: RTSP
-  transport, SRT latency, VAAPI toggle (same as v2).
-
-The systemd units are now static (`ExecStart=.../videowall-encode.sh 4k`)
-and never need touching again — the web UI (or you, by hand) only ever
-edits the `.env`/`.conf` files in `/etc/videowall/` and restarts the
-corresponding service.
-
-`videowall-encode.sh` also now passes `-progress /run/videowall/progress-<wall>.txt`
-to ffmpeg, which is how the web UI gets live frame/fps/bitrate numbers —
-see `read_progress()` in `server/webui/app.py`. `/run/videowall` is
-created automatically by the systemd units' `RuntimeDirectory=` directive.
+**Pi web UI** — pick which wall feeds each HDMI output from a dropdown of what
+the server actually offers, test a source before applying, and see per-output
+status.
 
 ## The server web UI
 
-A small Flask app (`server/webui/app.py`, plain server-rendered HTML —
-no JS framework, no build step) served by `gunicorn`:
+- `/` — dashboard, polling `/api/status` every 3s: server stats, and per wall
+  its enabled state, systemd state, restart count, encoder fps/bitrate, who is
+  connected, and a **mosaic snapshot** with a cell-grid overlay numbering each
+  cell in camera-list order (so a mis-placed or black tile is obvious).
+- `/config` — per-wall settings and camera list, wall creation and deletion,
+  enable/disable, and the global settings (RTSP transport, SRT latency, VAAPI,
+  relay endpoints, snapshot options).
+- **"Check feeds"** — probes each of a wall's cameras in parallel and lays the
+  results out in that wall's own grid shape, so a red tile sits where you'd
+  look on the actual wall.
 
-- `/` — dashboard: server stats + per-wall status, auto-refreshing every
-  3s via a `fetch()` poll against `/api/status`.
-- `/config` — edit each wall's settings and camera list, and the shared
-  global settings. Saving validates the input (camera count must equal
-  rows×cols, numeric ranges checked) and, on success, restarts exactly
-  the affected encoder service(s).
+### The snapshot
 
-### Honesty note: "client connected" is inferred, not measured
+Tee'd off the existing encode pipeline (`split` inside the filtergraph), so it
+costs no extra camera connections and no extra decoding — only a small JPEG
+encode every `SNAPSHOT_INTERVAL_S`. Because encoders now *publish* to a
+listening relay rather than waiting for a client to connect, **the snapshot
+works even with no client watching**. `SNAPSHOT=0` is a kill switch that
+reverts the pipeline to exactly its previous shape.
 
-ffmpeg doesn't expose per-client SRT statistics (connected IP, RTT,
-packet loss) through any simple API. What it does do: in `mode=listener`,
-ffmpeg's SRT output blocks opening (and therefore blocks the whole
-pipeline from producing frames) until a client actually connects. So the
-dashboard treats "the progress file was updated in the last 5 seconds"
-as a reasonable stand-in for "the Pi is connected and actively pulling
-this stream" — accurate for connected/not-connected, but it cannot tell
-you *who* is connected, their link quality, or how many clients (SRT
-listener mode here only ever expects one). Getting real per-client stats
-would mean replacing the ffmpeg listener with `srt-live-transmit` (from
-the `srt-tools` package) and its `-statsfile` output — deliberately not
-done here to keep this "small," as asked; worth doing later if you need
-real RTT/loss numbers.
+### Client info is measured, not inferred
+
+Earlier versions guessed "is a client connected?" from the freshness of
+ffmpeg's progress file, because ffmpeg cannot report anything about SRT peers.
+The relay can: the dashboard reads MediaMTX's API for real reader counts,
+client addresses and bytes sent. If the relay itself is unreachable the UI says
+so, rather than implying nobody is watching.
+
+### What the per-camera probe can and cannot tell you
+
+It runs `ffprobe` against each camera URL and reports two things separately —
+is the address/port reachable, and is a stream actually being published —
+plus the detected codec/resolution/fps.
+
+- It uses the **same RTSP transport as the encoder** (`RTSP_TRANSPORT`).
+  Without that, ffprobe would default to UDP-first while the encoder uses TCP,
+  and a camera could pass the probe yet still break the wall.
+- There is a third **inconclusive** state, for a host that answers but sends no
+  stream in time. Forcing that into "unreachable" was misleading when triaging
+  nine cameras.
+- It is **on demand only**, never on the dashboard poll, with a cooldown: each
+  probe opens another short-lived RTSP connection per camera on the Protect
+  controller, on top of the permanent ones the encoders hold.
+- Camera URLs are **redacted** in responses and raw ffprobe stderr is never
+  returned — UniFi Protect RTSP paths are themselves credentials.
+- Why no raw UDP "is the port open?" test: for SRT/UDP a silent open port and a
+  firewalled one are indistinguishable from outside, so it would produce
+  confident wrong answers. The SRT handshake is the only honest signal, which
+  is why reachability and stream detection are tested together.
+
+**Useful to know:** a dead camera usually takes down the *whole* wall, not one
+cell — `xstack` needs all its inputs, so when one RTSP source ends the encoder
+exits and systemd restarts it. So the symptom of one bad feed is a climbing
+restart count, and the probe is what tells you *which* URL is at fault. That is
+also why there's no automated black-cell detection: it would be unavailable
+exactly when the wall is broken.
 
 ## The Pi (client) web UI
 
-A second small Flask app (`pi/webui/app.py`, same style, also `gunicorn`
-on port 8080 of the Pi):
+- `/` — Pi stats and per-output status (which wall, and whether mpv is running).
+- `/config` — server host, relay port, read-only API token, a **wall dropdown
+  per output** populated from the server, SRT latency, and hardware decode
+  mode. "Test this source" probes the selected wall; "Save & apply" restarts
+  the displays.
 
-- `/` — dashboard: Pi stats + whether each screen's mpv display process is
-  currently running.
-- `/config` — set server host, the two SRT ports, SRT latency and the mpv
-  hardware-decode mode, with a **"Test this source"** button per stream and
-  a free-form URL tester. "Save only" rewrites `pi.env`; "Save & apply"
-  additionally restarts the displays so the change takes effect at once.
+Applying config needs no reboot: each display loop re-reads `pi.env` on every
+reconnect, so applying is just restarting the mpv processes. If the server is
+unreachable the dropdowns degrade to free-text boxes, so the Pi is never
+unconfigurable because of a server outage.
 
-### How the source test works (and its honest limits)
-
-The test runs `ffprobe` against the source URL with a timeout and reports
-two things the way you asked — *is the address/port reachable* and *is a
-stream actually detected*:
-
-- For an SRT source, one `ffprobe` does both jobs at once: completing the
-  SRT caller handshake proves the address/port is reachable, and reading
-  stream metadata proves something is really being published there (it
-  reports the detected codec / resolution / fps / bitrate). If the
-  handshake never completes, ffprobe's error tells us the port isn't
-  reachable; if it connects but no video stream is found, that's reported
-  distinctly. See `probe_source()` in `pi/webui/app.py`.
-- **Why there's no separate raw UDP "port open?" check**: SRT rides over
-  UDP, and a bare UDP port probe is meaningless — a silent (open) UDP port
-  and a firewalled one look identical from outside, so it would produce
-  confident-but-wrong answers. The SRT handshake via ffprobe is the only
-  reliable reachability signal, which is why reachability and
-  stream-detection are tested together rather than as two independent
-  network checks.
-- **Single-listener caveat**: the server publishes each wall in SRT
-  `listener` mode, which accepts exactly one connection. While a wall is
-  actually being *displayed*, the Pi's mpv already holds that one slot, so
-  the web UI does **not** fire a second probe at it (that would be refused
-  and tells you nothing) — instead it reports that the live display itself
-  already confirms the source is reachable and streaming, and notes you can
-  stop the display to run a full codec/resolution probe. So: run the test
-  during setup/troubleshooting, before that wall's display has connected,
-  to get the full stream details.
+Because the relay allows many readers, testing a wall works **even while it is
+on screen** — the probe is simply one more subscriber.
 
 ## Security
 
-- **Auth**: HTTP Basic, credentials in `/etc/videowall/webui.env`
-  (`WEBUI_PASSWORD_HASH` — only ever stored hashed). Each machine's
-  `install.sh` generates its own random password on first install and
-  prints it once. The server and Pi have independent logins.
-- **Least-privilege actions**: each web UI runs as its own system user
-  (`videowall-web`), separate from the `videowall` user that runs the
-  encoders / displays, and each gets an exact-match `sudoers.d` rule with
-  no wildcards:
-  - Server (`server/sudoers/videowall-webui`): may only restart/inspect
-    the two specific encoder services.
-  - Pi (`pi/sudoers/videowall-pi-webui`): may only run
-    `pkill -x -u videowall mpv` (the "restart displays" action) — nothing
-    else as root. The stream test (`ffprobe`) and reading process state
-    need no privilege at all.
-- **Network exposure**: bind both UIs to Tailscale only, not the open
-  internet — there's no TLS here (plain HTTP + Basic Auth), which is fine
-  inside an already-encrypted Tailscale tunnel but not otherwise. If a
-  firewall is active on either box, only allow TCP 8080 from your tailnet.
-- **No CSRF protection**: the config forms (on both UIs) don't use CSRF
-  tokens. Given Basic Auth + Tailscale-only exposure, the practical risk
-  is low (worst case: an attacker who can get your browser to submit a
-  request changes a camera URL or bitrate — annoying, not a compromise),
-  but it's a real gap if you ever exposed this more broadly. Not fixed
-  here to keep the apps small; would mean pulling in Flask-WTF or
-  hand-rolling tokens.
-- **Fresh-install assumption**: both `install.sh` scripts assume a fresh
-  machine. If you already have v2 running on the same box, review the
-  user/group setup before re-running — they don't migrate an existing
-  `videowall` user's config.
+- **Auth**: HTTP Basic on both UIs, password stored only as a hash in
+  `/etc/videowall/webui.env`. Each machine has its own independent login, and
+  each installer prints its password once.
+- **Client token**: the server also issues a **read-only bearer token** that
+  authorises only `/api/walls`. Pis hold that, never the admin password.
+- **Least privilege**: each UI runs as its own `videowall-web` account,
+  separate from the `videowall` account that runs encoders/displays.
+  - Server: sudoers grants exactly one root-owned script,
+    `/usr/local/sbin/videowall-ctl`, which validates its verb against an
+    allowlist and its wall name against a strict slug pattern before touching
+    systemd. Dynamic wall names can't be enumerated in sudoers, so the
+    validation lives in code rather than in sudoers glob matching. Keep that
+    script root-owned and not writable by `videowall-web` or it stops being a
+    gate.
+  - Pi: sudoers grants only `pkill -x -u videowall mpv` (the "restart
+    displays" action). Probing and reading status need no privilege at all.
+- **Relay exposure**: MediaMTX's RTSP publish port and HTTP API are bound to
+  **loopback**; only the SRT read port (8890) is reachable from the network.
+  Subscribing is unauthenticated, which is fine while that port is only
+  reachable over Tailscale but is **not** safe to expose to the internet.
+- **Network**: bind both UIs and the relay's read port to Tailscale only.
+  There's no TLS here (plain HTTP + Basic Auth), which is acceptable inside an
+  encrypted tunnel and nowhere else. Scope firewall rules to `tailscale0`
+  rather than opening ports globally.
+- **No CSRF tokens** on the config forms. Given Basic Auth plus Tailscale-only
+  exposure the practical risk is low (worst case someone tricks your browser
+  into changing a bitrate), but it is a real gap if ever exposed more broadly.
+- Both installers assume a **fresh machine**; they don't migrate an existing
+  v2 install's users/config.
 
 ## Setup
 
-Same order as v2 — server first, then Pi:
+Clone the **whole repo** on each machine — the installers deploy shared Python
+helpers from `common/`.
+
+Server first:
 
 ```bash
 cd server
-sudo ./install.sh
-# edit /etc/videowall/cameras-4k.conf and cameras-1080p.conf, or do this
-# from the web UI after starting it
-sudo systemctl enable --now videowall-encode-4k.service
-sudo systemctl enable --now videowall-encode-1080p.service
+sudo ./install.sh          # prints the admin password + client read token
+sudo systemctl enable --now mediamtx.service
+sudo systemctl enable --now videowall-encode@4k.service
+sudo systemctl enable --now videowall-encode@1080p.service
 sudo systemctl enable --now videowall-webui.service
 ```
 
-Then open `http://<server>:8080/` (over Tailscale) and log in with the
-credentials the server's `install.sh` printed.
+`install.sh` will **refuse to install an unverified MediaMTX binary**: it
+downloads the pinned release, prints the SHA256, and stops so you can check it
+against the release page, then re-run with `MEDIAMTX_SHA256=<hash>`. You can
+also pre-stage the tarball in `/opt/videowall/dist/`.
 
-On the Pi:
+Then each Pi:
 
 ```bash
 cd pi
 sudo ./install.sh
 ```
 
-The Pi's `install.sh` prints its own admin password and enables the Pi web
-UI automatically. After it finishes you can either edit `/etc/videowall/pi.env`
-by hand or open `http://<pi>:8080/` (over Tailscale) and use the **Config &
-test** page — set the server host and ports, click "Test this source" on
-each to confirm the server is reachable and streaming, then "Save & apply".
-The rest of the Pi setup (confirming DRM connector names with `xrandr`,
-forcing modes via `cmdline.txt`, rebooting) is unchanged from v2 and is
-printed by the installer.
+Open `http://<pi>:8080/`, set the server host, paste the read token, pick a
+wall per output, test, and apply. The DRM connector-name and forced-mode steps
+are unchanged and printed by the installer.
 
-## What I couldn't verify without the actual hardware/network
+A new wall needs no files by hand — create it in the server UI, which writes
+the config and enables `videowall-encode@<name>.service` for you.
 
-- Everything already listed in v2's README (SRT/libsrt availability, real
-  CPU load under 13 concurrent decodes, DRM connector names, Tailscale
-  direct-vs-relay behavior) still applies here — nothing about the web UI
-  changes those.
-- Whether ffmpeg's SRT listener really blocks output-open until a client
-  connects is based on well-documented general behavior for
-  connection-oriented network output protocols, not something tested
-  against your specific ffmpeg build — worth confirming once deployed
-  (start an encoder with no Pi connected, check the dashboard shows
-  "waiting for connection", then start the Pi and confirm it flips to
-  "connected").
-- The Pi source-test interpretation logic (reachable vs. no-stream vs.
-  unreachable, and the fps/bitrate parsing) was validated against
-  representative ffprobe outputs, but the exact ffprobe error strings your
-  build emits for each failure may differ — if a genuinely-unreachable
-  source is ever mislabeled "reachable, no stream", add that build's error
-  text to `_UNREACHABLE_HINTS` in `pi/webui/app.py`.
-- The "already displaying → skip the probe" shortcut depends on the web UI
-  being able to see the `videowall` user's mpv processes via `/proc`. That
-  works on a stock Raspberry Pi OS; if you've hardened `/proc` with
-  `hidepid`, the probe would run anyway and likely be refused by the
-  server's single SRT listener — harmless, but it would report the live
-  wall as unreachable, so test with that wall's display stopped.
+## Failure modes worth recognising
+
+| Symptom | Meaning |
+|---|---|
+| Wall shows "config error" | camera count ≠ rows × columns; the encoder exits 78 and stops cleanly instead of restart-looping |
+| Restart count climbing | one camera feed is dropping and taking the wall with it — run "Check feeds" |
+| "relay unreachable" | `mediamtx.service` is down; nothing can be published or watched |
+| "encoder up, not publishing" | encoder running but the relay has no stream for it yet |
+| Snapshot dimmed / "stale" | no fresh frame recently — usually the encoder isn't running |
+| Probe says "inconclusive" | host answered, no stream in time — not the same as unreachable |
+
+## What I couldn't verify without the hardware
+
+- **None of the Python has been executed** — there was no interpreter on the
+  machine this was written on. Shell syntax, Jinja block balance and config-key
+  agreement across scripts/UIs/examples were checked statically, and the
+  filtergraph and privilege gate were exercised with dry-run harnesses, but
+  both Flask apps still need a real first run.
+- **MediaMTX's config schema** varies across versions. The shipped
+  `mediamtx.yml` targets v1.x and MediaMTX validates on startup, so a mismatch
+  appears immediately in `journalctl -u mediamtx`; the installer keeps
+  upstream's reference config at `/etc/videowall/mediamtx.reference.yml` for
+  diffing. The API field names the dashboard reads (`/v3/paths/list`,
+  `/v3/srtconns/list`) are likewise version-sensitive.
+- **`-atomic_writing` availability** on your ffmpeg build — the installer warns
+  if the option is missing, and `SNAPSHOT=0` is the escape hatch.
+- Whether ffprobe's error strings on your build all match the classifier's
+  hints; if a genuinely unreachable source is ever labelled "inconclusive", add
+  that text to `_UNREACHABLE_HINTS` in `common/probe.py` (and reinstall on both
+  machines, since both use it).
+- Everything from v2's README still applies: real CPU load under many
+  concurrent decodes, DRM connector names, and Tailscale direct-vs-relay
+  behaviour.
