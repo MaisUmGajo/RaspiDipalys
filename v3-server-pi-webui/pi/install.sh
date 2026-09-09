@@ -9,6 +9,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMMON_DIR="$REPO_DIR/../common"
 VW_USER="videowall"
 VW_WEB_USER="videowall-web"
 VW_GROUP="videowall"
@@ -78,8 +79,16 @@ systemctl enable getty@tty1.service
 systemctl set-default multi-user.target
 
 echo "==> Deploying web UI"
+if [ ! -d "$COMMON_DIR" ]; then
+  echo "Missing $COMMON_DIR — clone the whole repository, not just the pi/" >&2
+  echo "subdirectory: the web UI needs the shared helpers there." >&2
+  exit 1
+fi
 install -d -m 755 /opt/videowall/webui
 cp -r "$REPO_DIR/webui/"* /opt/videowall/webui/
+# Shared helpers (source prober, env parsing, auth), kept in one place so a
+# fix reaches both the server and the Pi.
+install -m 644 "$COMMON_DIR"/*.py /opt/videowall/webui/
 chown -R "$VW_WEB_USER:$VW_GROUP" /opt/videowall/webui
 
 if [ ! -f /etc/videowall/webui.env ]; then
@@ -134,14 +143,22 @@ cat <<'EOF'
 
 ==> Done. Before rebooting:
 
-1. Configure the source streams — either edit /etc/videowall/pi.env
-   directly, or (easier) open the web UI at http://<this-pi>:8080/ and use
-   the Config & test page: set SERVER_HOST + ports, click "Test this
-   source" on each to confirm the server is reachable and streaming, then
-   "Save & apply". Log in with the admin credentials printed above (stored
-   only as a hash in /etc/videowall/webui.env — if lost, delete that file
-   and re-run this script for a new one). Expose port 8080 over Tailscale
-   only, never the open internet (plain HTTP + Basic Auth).
+1. Configure the outputs — either edit /etc/videowall/pi.env directly, or
+   (easier) open the web UI at http://<this-pi>:8080/ and use the Config &
+   test page: set SERVER_HOST, paste the read-only API token that the
+   SERVER's installer printed, then pick which wall each HDMI output shows
+   from the dropdown (it lists the walls the server actually offers). Click
+   "Test this source" on each to confirm the stream is arriving, then
+   "Save & apply".
+
+   Walls are selected by NAME, not by port: every wall arrives on the one
+   relay SRT port (8890 by default), so there are no per-wall ports to keep
+   in sync. Several Pis can watch the same wall at once.
+
+   Log in with the admin credentials printed above (stored only as a hash in
+   /etc/videowall/webui.env — if lost, delete that file and re-run this
+   script for a new one). Expose port 8080 over Tailscale only, never the
+   open internet (plain HTTP + Basic Auth).
 
 2. Make sure the server's two encoder services are already running and
    confirmed publishing (see server/README.md) before you boot the Pi —

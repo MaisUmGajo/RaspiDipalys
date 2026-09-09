@@ -113,3 +113,112 @@ button:hover { background: #2f5bc0; }
   border-radius: 6px;
   padding: 0.5rem 0.75rem 0.5rem 1.5rem;
 }
+
+/* --- shared controls (previously only in the Pi's copy) ------------------ */
+.inline-row { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+button.secondary { background: #3a4049; }
+button.secondary:hover { background: #4a515c; }
+button.danger { background: #7a2420; }
+button.danger:hover { background: #942c27; }
+code {
+  font-family: ui-monospace, monospace;
+  background: #12151a;
+  border: 1px solid #2a2f38;
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.85em;
+}
+.test-result {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  border: 1px solid #3a4049;
+  background: #12151a;
+}
+.test-result.ok { border-color: #3ecf6b; background: #163a24; }
+.test-result.warn { border-color: #e2b93b; background: #3a3316; }
+.test-result.bad { border-color: #e2483b; background: #3a1616; }
+.test-result.pending { color: #9aa3af; }
+
+/* --- wall state + chips -------------------------------------------------- */
+.wall-card.state-off { border-left-color: #4a515c; opacity: 0.75; }
+.chip {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: #2a2f38;
+  color: #cfd3d9;
+  vertical-align: middle;
+  margin-left: 0.35rem;
+}
+.chip-on { background: #1e6b3a; color: #d6ffe4; }
+.chip-off { background: #3a4049; color: #cfd3d9; }
+.readers {
+  margin: 0.35rem 0;
+  padding: 0.35rem 0.5rem;
+  border-left: 2px solid #2a2f38;
+  font-size: 0.85rem;
+}
+
+/* --- mosaic snapshot with cell-grid overlay ------------------------------ */
+.snap-wrap { position: relative; margin-top: 0.6rem; line-height: 0; }
+.snap-wrap img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #2a2f38;
+  display: block;
+}
+.snap-wrap.stale img { opacity: 0.4; }
+.snap-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  pointer-events: none;
+}
+.snap-grid span {
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.7rem;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.snap-badge {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  background: #3a3316;
+  border: 1px solid #e2b93b;
+  color: #ffeaa7;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+.snap-empty {
+  margin-top: 0.6rem;
+  padding: 1.25rem;
+  text-align: center;
+  color: #9aa3af;
+  font-size: 0.85rem;
+  border: 1px dashed #2a2f38;
+  border-radius: 6px;
+}
+
+/* --- per-camera probe grid (mirrors the mosaic layout) ------------------- */
+.probe-grid { display: grid; gap: 4px; }
+.probe-cell {
+  border: 1px solid #3a4049;
+  border-radius: 4px;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.75rem;
+  background: #12151a;
+  overflow: hidden;
+}
+.probe-cell.ok { border-color: #3ecf6b; background: #163a24; }
+.probe-cell.warn { border-color: #e2b93b; background: #3a3316; }
+.probe-cell.bad { border-color: #e2483b; background: #3a1616; }
+.probe-url { color: #9aa3af; word-break: break-all; }
+.probe-detail { margin-top: 0.15rem; }

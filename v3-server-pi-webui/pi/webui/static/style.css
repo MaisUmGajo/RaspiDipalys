@@ -147,3 +147,5 @@ button.secondary:hover { background: #4a515c; }
   background: #161a20;
 }
 .inline-row { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+
+.wall-card.state-off { border-left-color: #4a515c; opacity: 0.75; }
