@@ -183,6 +183,48 @@ are unchanged and printed by the installer.
 A new wall needs no files by hand — create it in the server UI, which writes
 the config and enables `videowall-encode@<name>.service` for you.
 
+## Client hardware
+
+The client assumes a **Raspberry Pi 4**: two HDMI outputs, 64-bit Raspberry Pi
+OS, and enough headroom to run Xorg, mpv and a Flask web UI at once.
+
+**Older boards (Pi Zero W, Pi 1) are not supported yet** — deliberately
+deferred until the Pi 4 client is proven on hardware. What it would take,
+recorded so this doesn't need re-deriving:
+
+- **One HDMI output, not two.** The two display loops, the `OUTPUTS` map in
+  `pi/webui/app.py`, and especially `xorg-dualhead.conf` are all wrong there —
+  its `ZaphodHeads "HDMI-A-2"` names a connector that doesn't exist, which
+  would fail or leave a dead screen. Needs a variable output count (1..N).
+- **`gpu_mem=256` in `config.txt.append` is actively harmful there.** On a
+  512MB Zero W it leaves 256MB for Linux, which will not comfortably hold X +
+  Python + mpv. Needs ~64–128 on those boards. `max_framebuffers=2` and the
+  second `hdmi_force_hotplug:1=1` are also meaningless with one output.
+- **Drop X entirely on single-output boards.** With one output there's no need
+  for X's multi-screen handling: mpv can render straight to KMS with
+  `--vo=drm`, removing Xorg and unclutter, and avoiding the GL path (VideoCore
+  IV's GLES2 through Mesa is slow). Pair with `--hwdec=v4l2m2m` rather than
+  `-copy`, so frames go zero-copy via DRM PRIME instead of being memcpy'd by a
+  single core. That also replaces the autologin→startx dance with a plain
+  systemd service — lighter *and* simpler.
+- **`--workers 2` is too many** for gunicorn on 512MB; use 1, or skip the web
+  UI on such boards.
+- **ARMv6/32-bit**: BCM2835 needs Raspberry Pi OS **32-bit**. The 64-bit image
+  won't boot, and Debian's own armhf port requires ARMv7. Tailscale's ARMv6
+  build would need verifying too.
+- **No networking at all** on Pi Zero (non-W) and Pi 1 Model A — they cannot
+  be clients. Zero W is 2.4GHz Wi-Fi on a shared USB bus; Pi 1 B/B+ has
+  100Mbit Ethernet.
+- **Expect it to be marginal.** BCM2835's decoder tops out near 1080p30
+  H.264, so ~720p at 10–15fps is the realistic target. Note the efficient
+  legacy path (omxplayer / MMAL / dispmanx) was *removed* in Bookworm, so
+  modern mpv + V4L2 M2M + DRM is heavier than what made these boards good
+  video players years ago. A Pi Zero 2 W avoids nearly all of this.
+
+**The server needs no changes for small clients** — create a small wall (e.g.
+`zero` at 1280x720, 2x2, 10fps) and point the board at it. That is
+configuration, not code.
+
 ## Failure modes worth recognising
 
 | Symptom | Meaning |
