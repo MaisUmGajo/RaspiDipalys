@@ -1,12 +1,88 @@
 #!/bin/bash
 # Run with sudo on a fresh Raspberry Pi OS Lite (64-bit, Bookworm) install,
 # from inside this directory: sudo ./install.sh
-set -euo pipefail
+# -E so the ERR trap fires inside functions too. Every failure is reported
+# with the step, line, command and exit code — this script must never just
+# stop silently (a SIGPIPE once did exactly that; see the note by the
+# credential generation below).
+set -Eeuo pipefail
 
-if [ "$(id -u)" -ne 0 ]; then
-  echo "Run this as root (sudo ./install.sh)" >&2
-  exit 1
+CURRENT_STEP="startup"
+LOG_FILE=/var/log/videowall-pi-install.log
+
+step() { CURRENT_STEP="$1"; printf '\n==> %s\n' "$1"; }
+info() { printf '    %s\n' "$*"; }
+warn() { printf '    WARNING: %s\n' "$*" >&2; }
+die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
+
+on_err() {
+  local rc=$? line=${1:-?} cmd=${2:-?} extra=""
+  if [ "$rc" -gt 128 ]; then
+    local sig=$((rc - 128))
+    extra="  (killed by signal $sig$([ "$sig" -eq 13 ] && echo ' = SIGPIPE'))"
+  fi
+  printf '\n!!! INSTALL FAILED\n'
+  printf '    step:    %s\n' "$CURRENT_STEP"
+  printf '    line:    %s\n' "$line"
+  printf '    command: %s\n' "$cmd"
+  printf '    exit:    %s%s\n' "$rc" "$extra"
+  printf '    log:     %s\n' "$LOG_FILE"
+  printf '\n    Re-run after fixing; this script is idempotent.\n'
+}
+trap 'on_err "$LINENO" "$BASH_COMMAND"' ERR
+
+[ "$(id -u)" -eq 0 ] || die "Run this as root (sudo ./install.sh)"
+
+touch "$LOG_FILE" 2>/dev/null || LOG_FILE=/tmp/videowall-pi-install.log
+exec > >(tee -a "$LOG_FILE") 2>&1
+printf '=== videowall Pi install: %s ===\n' "$(date -Is)"
+
+export LC_ALL=C
+
+step "Preflight: shell environment"
+info "PATH=$PATH"
+# 'su' (without '-') keeps the calling user's PATH, which has no sbin
+# directories, so useradd/groupadd/visudo look like they don't exist. Repair
+# it for this run rather than failing halfway through, and explain why.
+SBIN_MISSING=()
+for d in /usr/local/sbin /usr/sbin /sbin; do
+  [ -d "$d" ] || continue
+  case ":$PATH:" in *":$d:"*) ;; *) SBIN_MISSING+=("$d") ;; esac
+done
+if [ "${#SBIN_MISSING[@]}" -gt 0 ]; then
+  PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+  export PATH
+  info "FIXED: prepended ${SBIN_MISSING[*]} to PATH for this run"
+  info "(use 'sudo -i' or 'su -' so your own shell has them too)"
 fi
+
+step "Preflight: required commands"
+PREFLIGHT_FAILED=0
+for cmd in apt-get dpkg install sed grep awk find tar getent \
+           useradd groupadd visudo systemctl; do
+  if p="$(command -v "$cmd" 2>/dev/null)"; then
+    info "ok   $cmd -> $p"
+  else
+    warn "missing: $cmd"
+    PREFLIGHT_FAILED=1
+  fi
+done
+[ "$PREFLIGHT_FAILED" -eq 0 ] || die "Required commands are missing (see above).
+    On a minimal image, useradd/groupadd come from 'passwd' and visudo from
+    'sudo'. Install those, or check the PATH note above, then re-run."
+
+# The web UI's privileged action relies on a drop-in in /etc/sudoers.d; with
+# no includedir line it would be silently ignored.
+if [ -f /etc/sudoers ] && \
+   ! grep -Eq '^[[:space:]]*[#@]includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers; then
+  warn "/etc/sudoers has no '#includedir /etc/sudoers.d' line, so the web UI's
+    sudoers drop-in will be ignored and its restart button won't work."
+fi
+
+if [ ! -d /run/systemd/system ]; then
+  die "systemd is not running as init — this installs systemd units."
+fi
+info "systemd is the running init"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMMON_DIR="$REPO_DIR/../common"
@@ -31,18 +107,20 @@ if [ -z "$GUNICORN_BIN" ]; then
   exit 1
 fi
 
-echo "==> Checking for SRT support in mpv's ffmpeg/libav"
-if ! ffmpeg -hide_banner -protocols 2>/dev/null | grep -qi '^  *srt$'; then
-  cat <<'EOF' >&2
-
-WARNING: ffmpeg on this system does not list "srt" among its protocols.
-mpv uses the same libav libraries, so it likely can't open srt:// URLs
-either. Either update to a Raspberry Pi OS build with libsrt support, or
-switch to the plain UDP fallback described in README.md (both the server's
-encode command and this Pi's mpv URL need to change together).
-Continuing installation regardless.
-EOF
-fi
+step "Checking for SRT support in mpv's ffmpeg/libav"
+# NOTE: deliberately not `ffmpeg ... | grep -q`. Under `set -o pipefail`,
+# grep -q exits as soon as it matches, ffmpeg then dies of SIGPIPE, and the
+# pipeline reports 141 — which made this check warn "SRT missing" even when
+# SRT was fully supported.
+PROTOCOLS="$(ffmpeg -hide_banner -protocols 2>/dev/null || true)"
+case "$PROTOCOLS" in
+  *srt*) info "ffmpeg/libav lists the srt protocol" ;;
+  *) warn "ffmpeg on this system does not list \"srt\" among its protocols.
+    mpv uses the same libav libraries, so it likely cannot open srt:// URLs
+    either, and the display would never connect. Either install a build with
+    libsrt support, or reconfigure the relay and this Pi onto a transport
+    both ends support. Continuing anyway." ;;
+esac
 
 echo "==> Creating dedicated users"
 # The display user (videowall) also owns the 'videowall' primary group.
@@ -78,25 +156,47 @@ systemctl daemon-reload
 systemctl enable getty@tty1.service
 systemctl set-default multi-user.target
 
-echo "==> Deploying web UI"
-if [ ! -d "$COMMON_DIR" ]; then
-  echo "Missing $COMMON_DIR — clone the whole repository, not just the pi/" >&2
-  echo "subdirectory: the web UI needs the shared helpers there." >&2
-  exit 1
-fi
+step "Deploying web UI"
+# The most common install mistake is copying only pi/ instead of cloning the
+# repo, so check for the actual files rather than just the directory.
+[ -d "$COMMON_DIR" ] || die "Missing $COMMON_DIR — clone the whole repository, not just pi/."
+shopt -s nullglob
+COMMON_FILES=("$COMMON_DIR"/*.py)
+shopt -u nullglob
+[ "${#COMMON_FILES[@]}" -gt 0 ] || die "No .py files in $COMMON_DIR — the clone looks incomplete."
+
 install -d -m 755 /opt/videowall/webui
-cp -r "$REPO_DIR/webui/"* /opt/videowall/webui/
+# Glob-free: copies dotfiles too and cannot fail on an unexpanded wildcard.
+cp -r "$REPO_DIR/webui/." /opt/videowall/webui/
 # Shared helpers (source prober, env parsing, auth), kept in one place so a
 # fix reaches both the server and the Pi.
-install -m 644 "$COMMON_DIR"/*.py /opt/videowall/webui/
+install -m 644 "${COMMON_FILES[@]}" /opt/videowall/webui/
 chown -R "$VW_WEB_USER:$VW_GROUP" /opt/videowall/webui
+for f in app.py probe.py vwcommon.py templates/index.html templates/config.html; do
+  [ -f "/opt/videowall/webui/$f" ] || die "Deploy incomplete: /opt/videowall/webui/$f is missing."
+done
+info "deployed $(find /opt/videowall/webui -type f | wc -l) files"
 
+step "Generating credentials"
 if [ ! -f /etc/videowall/webui.env ]; then
-  WEBUI_PASSWORD="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
-  PASSWORD_HASH="$(python3 -c "import sys; from werkzeug.security import generate_password_hash; print(generate_password_hash(sys.argv[1]))" "$WEBUI_PASSWORD")"
+  # Generated inside Python with the `secrets` module. The previous version
+  # used `tr -dc ... < /dev/urandom | head -c 20`, where head exits first, tr
+  # dies of SIGPIPE, and `set -o pipefail` turned that into a completely
+  # silent abort of the installer at exactly this step.
+  mapfile -t CREDS < <(python3 - <<'PY'
+import secrets, string
+from werkzeug.security import generate_password_hash
+alphabet = string.ascii_letters + string.digits
+password = "".join(secrets.choice(alphabet) for _ in range(20))
+print(password)
+print(generate_password_hash(password))
+PY
+  )
+  [ "${#CREDS[@]}" -eq 2 ] || die "Credential generation produced ${#CREDS[@]} lines, expected 2."
+  WEBUI_PASSWORD="${CREDS[0]}"
   {
     echo "WEBUI_USER=admin"
-    echo "WEBUI_PASSWORD_HASH=$PASSWORD_HASH"
+    echo "WEBUI_PASSWORD_HASH=${CREDS[1]}"
   } > /etc/videowall/webui.env
   chmod 640 /etc/videowall/webui.env
   chown root:"$VW_GROUP" /etc/videowall/webui.env
