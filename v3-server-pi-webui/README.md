@@ -192,10 +192,15 @@ OS, and enough headroom to run Xorg, mpv and a Flask web UI at once.
 deferred until the Pi 4 client is proven on hardware. What it would take,
 recorded so this doesn't need re-deriving:
 
-- **One HDMI output, not two.** The two display loops, the `OUTPUTS` map in
-  `pi/webui/app.py`, and especially `xorg-dualhead.conf` are all wrong there —
-  its `ZaphodHeads "HDMI-A-2"` names a connector that doesn't exist, which
-  would fail or leave a dead screen. Needs a variable output count (1..N).
+- **One HDMI output, one stream — no parallel decode is in scope.** These
+  boards are only ever expected to display a single wall, so the work is
+  "support an output count of 1", not "support N". The two display loops, the
+  `OUTPUTS` map in `pi/webui/app.py`, and especially `xorg-dualhead.conf` are
+  all wrong there — its `ZaphodHeads "HDMI-A-2"` names a connector that
+  doesn't exist, which would fail or leave a dead screen.
+  Usefully, this means the decode ceiling is set by ONE stream's resolution,
+  which is a server-side config choice (make a small wall), not a client
+  limitation to engineer around.
 - **`gpu_mem=256` in `config.txt.append` is actively harmful there.** On a
   512MB Zero W it leaves 256MB for Linux, which will not comfortably hold X +
   Python + mpv. Needs ~64–128 on those boards. `max_framebuffers=2` and the
