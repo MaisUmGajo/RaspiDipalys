@@ -1,49 +1,106 @@
 {% extends "base.html" %}
+{% macro wall_fields(w, env, cams) -%}
+  <div class="grid-2">
+    <label>Rows <input type="number" name="rows" min="1" value="{{ env.get('ROWS', 3) }}" required></label>
+    <label>Columns <input type="number" name="cols" min="1" value="{{ env.get('COLS', 3) }}" required></label>
+    <label>Canvas width <input type="number" name="canvas_w" min="2" value="{{ env.get('CANVAS_W', 3840) }}" required></label>
+    <label>Canvas height <input type="number" name="canvas_h" min="2" value="{{ env.get('CANVAS_H', 2160) }}" required></label>
+    <label>Bitrate (kbps) <input type="number" name="bitrate_kbps" min="100" value="{{ env.get('BITRATE_KBPS', 8000) }}" required></label>
+    <label>FPS <input type="number" name="fps" min="1" max="60" value="{{ env.get('FPS', 15) }}" required></label>
+    <label class="checkbox"><input type="checkbox" name="enabled" {{ 'checked' if env.get('ENABLED', 'true')|lower == 'true' }}> Enabled (run this wall)</label>
+  </div>
+  <label>Camera RTSP URLs (one per line, row-major order — must be rows × columns)
+    <textarea name="cameras" rows="6" spellcheck="false">{{ cams|join("\n") }}</textarea>
+  </label>
+{%- endmacro %}
 {% block content %}
 <h1>Config</h1>
 
-{% if saved %}
-<p class="flash-ok">Saved — {{ saved }} encoder{{ "s" if saved == "global" else "" }} restarted.</p>
+{% if saved == 'global' %}
+<p class="flash-ok">Global settings saved — running walls restarted.</p>
+{% elif saved == 'created' %}
+<p class="flash-ok">Wall created.</p>
+{% elif saved == 'deleted' %}
+<p class="flash-ok">Wall deleted — its settings and camera list were removed.</p>
+{% elif saved %}
+<p class="flash-ok">Saved — wall '{{ saved }}' updated.</p>
 {% endif %}
 {% if errors %}
-<ul class="flash-errors">
-  {% for e in errors %}<li>{{ e }}</li>{% endfor %}
-</ul>
+<ul class="flash-errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}
 
-{% for wall, meta in walls.items() %}
-<h2>{{ meta.label }}</h2>
+<h2>Walls</h2>
+<p class="note">Each wall is published to the relay under its own name, and
+clients subscribe to it by name — there are no per-wall ports to keep track
+of. A disabled wall keeps its settings and camera list but does not run and
+does not start at boot.</p>
+
+{% if not walls %}
+<p class="note">No walls yet. Create the first one below.</p>
+{% endif %}
+
+{% for slug, env in walls.items() %}
+<h3>{{ slug }}
+  {% if env.get('ENABLED', 'true')|lower == 'true' %}
+    <span class="chip chip-on">enabled</span>
+  {% else %}
+    <span class="chip chip-off">disabled</span>
+  {% endif %}
+</h3>
 <form method="post">
-  <input type="hidden" name="form" value="{{ wall }}">
-  <div class="grid-2">
-    <label>Rows <input type="number" name="rows" min="1" value="{{ wall_data[wall].get('ROWS', '') }}" required></label>
-    <label>Columns <input type="number" name="cols" min="1" value="{{ wall_data[wall].get('COLS', '') }}" required></label>
-    <label>Canvas width <input type="number" name="canvas_w" min="2" value="{{ wall_data[wall].get('CANVAS_W', '') }}" required></label>
-    <label>Canvas height <input type="number" name="canvas_h" min="2" value="{{ wall_data[wall].get('CANVAS_H', '') }}" required></label>
-    <label>SRT port <input type="number" name="port" min="1" max="65535" value="{{ wall_data[wall].get('PORT', '') }}" required></label>
-    <label>Bitrate (kbps) <input type="number" name="bitrate_kbps" min="100" value="{{ wall_data[wall].get('BITRATE_KBPS', '') }}" required></label>
-    <label>FPS <input type="number" name="fps" min="1" max="60" value="{{ wall_data[wall].get('FPS', '') }}" required></label>
+  <input type="hidden" name="wall" value="{{ slug }}">
+  {{ wall_fields(slug, env, cameras[slug]) }}
+  <div class="inline-row">
+    <button type="submit" name="action" value="save">Save &amp; apply</button>
+    {% if env.get('ENABLED', 'true')|lower == 'true' %}
+      <button type="submit" name="action" value="disable" class="secondary">Disable</button>
+    {% else %}
+      <button type="submit" name="action" value="enable" class="secondary">Enable</button>
+    {% endif %}
+    <button type="submit" name="action" value="delete" class="danger"
+            onclick="return confirm('Delete wall {{ slug }}?\n\nThis stops it and removes its settings AND its camera list ({{ cameras[slug]|length }} URLs). This cannot be undone.');">Delete</button>
   </div>
-  <label>Camera RTSP URLs (one per line, row-major order — must be rows × columns)
-    <textarea name="cameras" rows="6" spellcheck="false">{{ camera_data[wall]|join("\n") }}</textarea>
-  </label>
-  <button type="submit">Save &amp; restart {{ meta.label }} encoder</button>
+  <p class="note">Client subscribe URL:
+    <code>srt://&lt;this-server&gt;:8890?streamid=read:{{ slug }}</code></p>
 </form>
 {% endfor %}
 
+<h2>Add a wall</h2>
+<form method="post">
+  <input type="hidden" name="action" value="create">
+  <label>Name (lowercase letters/digits, then letters, digits, _ or -)
+    <input type="text" name="slug" placeholder="lobby-4k" pattern="[a-z0-9][a-z0-9_-]{0,31}" required>
+  </label>
+  {{ wall_fields('', {}, []) }}
+  <button type="submit">Create wall</button>
+</form>
+
 <h2>Global</h2>
 <form method="post">
-  <input type="hidden" name="form" value="global">
+  <input type="hidden" name="action" value="global">
   <div class="grid-2">
-    <label>RTSP transport
+    <label>RTSP transport (cameras)
       <select name="rtsp_transport">
-        <option value="tcp" {{ "selected" if global_data.get("RTSP_TRANSPORT", "tcp") == "tcp" }}>tcp</option>
-        <option value="udp" {{ "selected" if global_data.get("RTSP_TRANSPORT") == "udp" }}>udp</option>
+        <option value="tcp" {{ 'selected' if global_data.get('RTSP_TRANSPORT', 'tcp') == 'tcp' }}>tcp</option>
+        <option value="udp" {{ 'selected' if global_data.get('RTSP_TRANSPORT') == 'udp' }}>udp</option>
       </select>
     </label>
     <label>SRT latency (ms) <input type="number" name="srt_latency_ms" min="0" value="{{ global_data.get('SRT_LATENCY_MS', 400) }}" required></label>
-    <label class="checkbox"><input type="checkbox" name="vaapi" {{ "checked" if global_data.get("VAAPI") == "1" }}> Use VAAPI hardware encode</label>
+    <label class="checkbox"><input type="checkbox" name="vaapi" {{ 'checked' if global_data.get('VAAPI') == '1' }}> Use VAAPI hardware encode</label>
   </div>
-  <button type="submit">Save &amp; restart both encoders</button>
+  <div class="grid-2">
+    <label>Relay RTSP host <input type="text" name="mediamtx_rtsp_host" value="{{ global_data.get('MEDIAMTX_RTSP_HOST', '127.0.0.1') }}" required></label>
+    <label>Relay RTSP port <input type="number" name="mediamtx_rtsp_port" min="1" max="65535" value="{{ global_data.get('MEDIAMTX_RTSP_PORT', 8554) }}" required></label>
+    <label>Relay API <input type="text" name="mediamtx_api" value="{{ global_data.get('MEDIAMTX_API', 'http://127.0.0.1:9997') }}" required></label>
+  </div>
+  <div class="grid-2">
+    <label class="checkbox"><input type="checkbox" name="snapshot" {{ 'checked' if global_data.get('SNAPSHOT', '1') == '1' }}> Write mosaic snapshots</label>
+    <label>Snapshot width (px) <input type="number" name="snapshot_width" min="320" value="{{ global_data.get('SNAPSHOT_WIDTH', 1280) }}" required></label>
+    <label>Snapshot interval (s) <input type="number" name="snapshot_interval_s" min="1" value="{{ global_data.get('SNAPSHOT_INTERVAL_S', 5) }}" required></label>
+  </div>
+  <button type="submit">Save &amp; restart all walls</button>
+  <p class="note">Relay settings point at MediaMTX, which fans each wall out to
+  any number of clients. Publishing is loopback-only by design; only the read
+  port (8890) is reachable from the network.</p>
 </form>
 {% endblock %}

@@ -20,10 +20,12 @@ two pre-built streams and decodes+displays one per output — 2 decode
 sessions instead of 13. Covers connecting server and Pi across sites (e.g.
 over Tailscale).
 
-## [`v3-server-pi-webui/`](v3-server-pi-webui) — current: adds web UIs on both machines
+## [`v3-server-pi-webui/`](v3-server-pi-webui) — current: any number of walls, multiple clients, web UIs
 
-Same split architecture as v2, plus a small web interface on **each**
-machine:
+Same split architecture as v2, plus: **any number of walls** (each one a config
+file, run by a templated systemd unit, and switchable off without losing its
+config), **multiple Pi clients watching the same wall** via a MediaMTX relay,
+and a small web interface on **each** machine:
 
 - **Server UI** — edit each wall's camera list/bitrate/fps/port without
   SSH; live dashboard (server stats, per-encoder status, best-effort "is

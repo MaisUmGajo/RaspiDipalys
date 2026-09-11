@@ -10,14 +10,14 @@
   <div class="card"><div class="card-label">Uptime</div><div class="card-value" id="stat-uptime">–</div></div>
 </section>
 
-<h2>Displays</h2>
-<p class="note">Source server: <strong id="server-host">–</strong></p>
-<div id="walls"></div>
+<h2>Outputs</h2>
+<p class="note">Relay: <strong id="server-host">–</strong></p>
+<div id="outputs"></div>
 
 <p class="note">Refreshes every 3s. "Displaying" means an mpv process is
-currently running for that screen's stream — it does not by itself prove the
-server is reachable; use the <a href="{{ url_for('config') }}">Config &amp;
-test</a> page to probe a source.</p>
+running for that output's wall — it does not by itself prove the stream is
+arriving. Use <a href="{{ url_for('config') }}">Config &amp; test</a> to probe
+a source.</p>
 
 <script>
 async function refresh() {
@@ -31,23 +31,25 @@ async function refresh() {
   document.getElementById("stat-mem").textContent = s.mem_percent.toFixed(0) + "%";
   document.getElementById("stat-load").textContent = s.load_avg.map(x => x.toFixed(2)).join(" / ");
   document.getElementById("stat-temp").textContent = s.temp_c !== null ? s.temp_c + "°C" : "n/a";
-  const h = Math.floor(s.uptime_s / 3600);
-  const d = Math.floor(h / 24);
+  const h = Math.floor(s.uptime_s / 3600), d = Math.floor(h / 24);
   document.getElementById("stat-uptime").textContent = d > 0 ? d + "d " + (h % 24) + "h" : h + "h";
 
-  document.getElementById("server-host").textContent = data.server_host || "(not set)";
+  document.getElementById("server-host").textContent =
+    data.server_host ? `${data.server_host}:${data.srt_port}` : "(not set)";
 
-  const wallsEl = document.getElementById("walls");
-  wallsEl.innerHTML = "";
-  for (const w of data.walls) {
+  const el = document.getElementById("outputs");
+  el.innerHTML = "";
+  for (const o of data.outputs) {
+    const unused = !o.wall;
+    const cls = unused ? "state-off" : (o.displaying ? "state-good" : "state-warn");
     const div = document.createElement("div");
-    div.className = "wall-card " + (w.displaying ? "state-good" : "state-warn");
+    div.className = "wall-card " + cls;
     div.innerHTML = `
-      <h3>${w.label}</h3>
-      <div class="wall-row"><span>SRT port</span><span>${w.port}</span></div>
-      <div class="wall-row"><span>Status</span><span>${w.displaying ? "displaying" : "not running"}</span></div>
+      <h3>${o.label}</h3>
+      <div class="wall-row"><span>Wall</span><span>${o.wall || "(unused)"}</span></div>
+      <div class="wall-row"><span>Status</span><span>${unused ? "no wall assigned" : (o.displaying ? "displaying" : "not running")}</span></div>
     `;
-    wallsEl.appendChild(div);
+    el.appendChild(div);
   }
 }
 refresh();

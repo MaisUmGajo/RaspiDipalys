@@ -3,40 +3,52 @@
 <h1>Config &amp; test</h1>
 
 {% if saved == "save" %}
-<p class="flash-ok">Saved. Click "Apply" (or reboot) for the displays to pick up the change.</p>
+<p class="flash-ok">Saved. Click "Save &amp; apply" (or reboot) for the displays to pick it up.</p>
 {% elif saved == "apply" %}
-<p class="flash-ok">Saved and displays restarted — they will reconnect with the new settings within a few seconds.</p>
+<p class="flash-ok">Saved and displays restarted — they reconnect within a few seconds.</p>
 {% endif %}
 {% if errors %}
 <ul class="flash-errors">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
 {% endif %}
 
-<h2>Source streams</h2>
-<p class="note">These are the two composited streams this Pi pulls from the
-server. Set the server address and per-wall ports, then <strong>test</strong>
-each source before applying — the test checks the address/port is reachable
-and that a live video stream is actually being published there.</p>
-
 <form method="post">
-  <label>Server host (Tailscale IP / MagicDNS name, or LAN IP)
-    <input type="text" name="server_host" id="f-host" value="{{ env.get('SERVER_HOST', '') }}" required>
-  </label>
+  <h2>Server</h2>
+  <div class="grid-2">
+    <label>Server host (Tailscale IP / MagicDNS name, or LAN IP)
+      <input type="text" name="server_host" id="f-host" value="{{ env.get('SERVER_HOST', '') }}" required>
+    </label>
+    <label>Relay SRT port
+      <input type="number" name="mediamtx_srt_port" id="f-port" min="1" max="65535"
+             value="{{ env.get('MEDIAMTX_SRT_PORT', 8890) }}" required>
+    </label>
+    <label>Read-only API token (for the wall list)
+      <input type="text" name="server_api_token" value="{{ env.get('SERVER_API_TOKEN', '') }}"
+             placeholder="printed by the server installer">
+    </label>
+  </div>
+  <p class="note">All walls share one SRT port; each is selected by name, so
+  there are no per-wall ports to keep in sync. The token only authorises
+  fetching the wall list — it is not the server's admin password.</p>
 
-  {% for key, meta in streams.items() %}
+  <h2>Outputs</h2>
+  <p class="note" id="wall-src">Loading the wall list from the server…</p>
+
+  {% for key, meta in outputs.items() %}
   <div class="stream-block">
     <h3>{{ meta.label }}</h3>
     <div class="inline-row">
-      <label>SRT port
-        <input type="number" name="{{ 'port_4k' if key == '4k' else 'port_1080p' }}"
-               id="f-port-{{ key }}" min="1" max="65535"
-               value="{{ env.get(meta.port_key, meta.default_port) }}" required>
+      <label>Wall
+        <select name="output{{ key }}_wall" id="sel-{{ key }}" data-current="{{ env.get(meta.key, '') }}">
+          <option value="{{ env.get(meta.key, '') }}">{{ env.get(meta.key, '') or '(unused)' }}</option>
+        </select>
       </label>
-      <button type="button" class="secondary" onclick="testStream('{{ key }}')">Test this source</button>
+      <button type="button" class="secondary" onclick="testOutput('{{ key }}')">Test this source</button>
     </div>
     <div class="test-result pending" id="result-{{ key }}" hidden></div>
   </div>
   {% endfor %}
 
+  <h2>Playback</h2>
   <div class="grid-2">
     <label>SRT latency (ms) — must match the server
       <input type="number" name="srt_latency_ms" min="0" value="{{ env.get('SRT_LATENCY_MS', 400) }}" required>
@@ -59,9 +71,8 @@ and that a live video stream is actually being published there.</p>
 </form>
 
 <h2>Test an arbitrary source URL</h2>
-<p class="note">Optional: probe any <code>srt://</code>, <code>rtsp://</code>,
-<code>udp://</code> or <code>http(s)://</code> URL directly — handy for
-checking a camera's RTSP feed, or the server stream from here without saving.</p>
+<p class="note">Probe any srt://, rtsp://, udp:// or http(s):// URL directly —
+handy for checking a camera's feed from here.</p>
 <div class="stream-block">
   <div class="inline-row">
     <label style="flex:1; min-width:240px;">URL
@@ -73,25 +84,75 @@ checking a camera's RTSP feed, or the server stream from here without saving.</p
 </div>
 
 <script>
+async function loadWalls() {
+  const note = document.getElementById("wall-src");
+  let data;
+  try {
+    const res = await fetch("/api/walls");
+    data = await res.json();
+  } catch (e) {
+    note.textContent = "Could not load the wall list — enter names by hand below.";
+    return;
+  }
+  if (!data.walls) {
+    note.textContent = data.error || "Wall list unavailable — enter names by hand.";
+    for (const id of ["sel-1", "sel-2"]) {
+      const sel = document.getElementById(id);
+      const cur = sel.dataset.current || "";
+      // No list available: swap the dropdown for a free-text box so the Pi is
+      // never unconfigurable just because the server is unreachable.
+      const input = document.createElement("input");
+      input.type = "text"; input.name = sel.name; input.value = cur;
+      input.placeholder = "wall name";
+      sel.replaceWith(input);
+    }
+    return;
+  }
+  note.textContent = `${data.walls.length} wall(s) offered by the server.`;
+  for (const id of ["sel-1", "sel-2"]) {
+    const sel = document.getElementById(id);
+    const cur = sel.dataset.current || "";
+    sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = ""; none.textContent = "(unused)";
+    sel.appendChild(none);
+    for (const w of data.walls) {
+      const o = document.createElement("option");
+      o.value = w.wall;
+      const geom = `${w.cols}×${w.rows} · ${w.canvas_w}×${w.canvas_h}`;
+      const flags = [!w.enabled ? "disabled" : null, w.published ? null : "not publishing"]
+        .filter(Boolean).join(", ");
+      o.textContent = `${w.wall} — ${geom}${flags ? " (" + flags + ")" : ""}`;
+      sel.appendChild(o);
+    }
+    sel.value = cur;
+    if (cur && sel.value !== cur) {
+      const o = document.createElement("option");
+      o.value = cur; o.textContent = `${cur} — not on the server`;
+      sel.appendChild(o); sel.value = cur;
+    }
+  }
+}
+
 function renderResult(el, data) {
   el.hidden = false;
-  if (data.error && data.accessible === null) {
+  if (data.reason === "no_ffprobe") {
     el.className = "test-result bad";
     el.textContent = data.error;
     return;
   }
-  const acc = !!data.accessible, str = !!data.stream_detected;
-  el.className = "test-result " + (acc && str ? "ok" : (acc ? "warn" : "bad"));
-  let html =
-    `<span class="badge ${acc ? "yes" : "no"}">${acc ? "reachable" : "not reachable"}</span>` +
-    `<span class="badge ${str ? "yes" : "no"}">${str ? "stream detected" : "no stream"}</span>`;
+  const acc = data.accessible, str = !!data.stream_detected;
+  const cls = str ? "ok" : (acc === false ? "bad" : "warn");
+  el.className = "test-result " + cls;
+  const accLabel = acc === true ? "reachable" : (acc === false ? "not reachable" : "inconclusive");
+  let html = `<span class="badge ${acc === true ? "yes" : "no"}">${accLabel}</span>` +
+             `<span class="badge ${str ? "yes" : "no"}">${str ? "stream detected" : "no stream"}</span>`;
   if (data.details) {
     const d = data.details;
     html += `<div style="margin-top:.4rem">${d.codec || "?"} · ${d.width || "?"}×${d.height || "?"}` +
             `${d.fps ? " · " + d.fps + " fps" : ""}${d.bitrate_kbps ? " · ~" + d.bitrate_kbps + " kbps" : ""}</div>`;
   }
-  if (data.note) html += `<div style="margin-top:.4rem" class="note">${data.note}</div>`;
-  if (data.error && !data.details) html += `<div style="margin-top:.4rem" class="note">${data.error}</div>`;
+  if (data.error) html += `<div style="margin-top:.4rem" class="note">${data.error}</div>`;
   el.innerHTML = html;
 }
 
@@ -105,22 +166,29 @@ async function postTest(payload, el) {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    renderResult(el, data);
+    renderResult(el, await res.json());
   } catch (e) {
     el.className = "test-result bad";
     el.textContent = "Test request failed: " + e;
   }
 }
 
-function testStream(key) {
-  const host = document.getElementById("f-host").value.trim();
-  const port = document.getElementById("f-port-" + key).value.trim();
-  postTest({stream: key, host: host, port: port}, document.getElementById("result-" + key));
+function testOutput(key) {
+  const ctrl = document.querySelector(`[name="output${key}_wall"]`);
+  const wall = (ctrl.value || "").trim();
+  const el = document.getElementById("result-" + key);
+  if (!wall) {
+    el.hidden = false;
+    el.className = "test-result warn";
+    el.textContent = "Pick a wall for this output first.";
+    return;
+  }
+  postTest({wall: wall}, el);
 }
 function testRaw() {
-  const url = document.getElementById("f-rawurl").value.trim();
-  postTest({url: url}, document.getElementById("result-raw"));
+  postTest({url: document.getElementById("f-rawurl").value.trim()},
+           document.getElementById("result-raw"));
 }
+loadWalls();
 </script>
 {% endblock %}

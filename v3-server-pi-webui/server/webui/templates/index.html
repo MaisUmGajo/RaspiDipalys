@@ -2,35 +2,80 @@
 {% block content %}
 <h1>Dashboard</h1>
 
-<section id="server-stats" class="cards">
+<section class="cards">
   <div class="card"><div class="card-label">CPU</div><div class="card-value" id="stat-cpu">–</div></div>
   <div class="card"><div class="card-label">Memory</div><div class="card-value" id="stat-mem">–</div></div>
   <div class="card"><div class="card-label">Load avg</div><div class="card-value" id="stat-load">–</div></div>
   <div class="card"><div class="card-label">Temp</div><div class="card-value" id="stat-temp">–</div></div>
   <div class="card"><div class="card-label">Uptime</div><div class="card-value" id="stat-uptime">–</div></div>
+  <div class="card"><div class="card-label">Relay</div><div class="card-value" id="stat-relay">–</div></div>
 </section>
 
 <h2>Walls</h2>
 <div id="walls"></div>
+<p class="note" id="no-walls" hidden>No walls configured yet —
+  <a href="{{ url_for('config') }}">add one on the Config page</a>.</p>
 
-<p class="note">Refreshes every 3s. "Connected" is inferred from the encoder
-actively producing output — SRT doesn't expose per-client detail (IP, RTT,
-loss %) through ffmpeg, only whether a client is currently pulling the
-stream.</p>
+<p class="note">Refreshes every 3s. Client counts and addresses come from the
+MediaMTX relay's API, so they are measured rather than inferred. The snapshot
+is the mosaic as actually encoded, refreshed on the interval set in Config.</p>
 
 <script>
-function stateClass(active, connected) {
-  if (active !== "active") return "state-bad";
-  return connected ? "state-good" : "state-warn";
+function fmtBytes(n) {
+  if (n === null || n === undefined) return "–";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v < 10 && i > 0 ? 1 : 0) + " " + u[i];
+}
+
+function wallClass(w) {
+  if (!w.enabled) return "state-off";
+  if (!w.config_ok || w.active_state !== "active") return "state-bad";
+  if (!w.published) return "state-warn";
+  return w.readers.length ? "state-good" : "state-warn";
+}
+
+function summary(w) {
+  if (!w.enabled) return "disabled (configured, not running)";
+  if (!w.config_ok) return `config error — ${w.camera_count} cameras for ${w.camera_expected} cells`;
+  if (w.active_state !== "active") return `encoder ${w.active_state} ${w.sub_state}`;
+  if (!w.relay_known) return "relay unreachable — cannot tell who is watching";
+  if (!w.published) return "encoder up, not publishing to relay yet";
+  return w.readers.length === 1 ? "1 client watching"
+       : `${w.readers.length} clients watching`;
+}
+
+function snapshotBlock(w) {
+  if (!w.enabled || w.snapshot_age_s === null) {
+    return `<div class="snap-empty">No snapshot available</div>`;
+  }
+  const stale = w.snapshot_age_s > 30;
+  const cells = [];
+  const rows = Number(w.rows) || 1, cols = Number(w.cols) || 1;
+  for (let i = 0; i < rows * cols; i++) cells.push(`<span>${i + 1}</span>`);
+  return `
+    <div class="snap-wrap${stale ? " stale" : ""}">
+      <img src="/snapshot/${w.wall}.jpg?t=${Date.now()}" alt="mosaic for ${w.wall}"
+           onerror="this.style.visibility='hidden'">
+      <div class="snap-grid" style="grid-template-columns:repeat(${cols},1fr);grid-template-rows:repeat(${rows},1fr)">
+        ${cells.join("")}
+      </div>
+      ${stale ? `<div class="snap-badge">stale — ${w.snapshot_age_s}s ago</div>` : ""}
+    </div>
+    <div class="note">Snapshot ${w.snapshot_age_s}s ago · cell numbers match the camera list order</div>`;
+}
+
+function readersBlock(w) {
+  if (!w.readers.length) return "";
+  return `<div class="readers">` + w.readers.map(r => `
+    <div class="wall-row"><span>${r.type} ${r.addr || ""}</span><span>${fmtBytes(r.bytes_sent)} sent</span></div>
+  `).join("") + `</div>`;
 }
 
 async function refresh() {
   let res;
-  try {
-    res = await fetch("/api/status");
-  } catch (e) {
-    return;
-  }
+  try { res = await fetch("/api/status"); } catch (e) { return; }
   if (!res.ok) return;
   const data = await res.json();
 
@@ -39,28 +84,72 @@ async function refresh() {
   document.getElementById("stat-mem").textContent = s.mem_percent.toFixed(0) + "%";
   document.getElementById("stat-load").textContent = s.load_avg.map(x => x.toFixed(2)).join(" / ");
   document.getElementById("stat-temp").textContent = s.temp_c !== null ? s.temp_c + "°C" : "n/a";
-  const h = Math.floor(s.uptime_s / 3600);
-  const d = Math.floor(h / 24);
+  const h = Math.floor(s.uptime_s / 3600), d = Math.floor(h / 24);
   document.getElementById("stat-uptime").textContent = d > 0 ? d + "d " + (h % 24) + "h" : h + "h";
+  const relayEl = document.getElementById("stat-relay");
+  relayEl.textContent = data.relay_up ? "up" : "down";
+  relayEl.style.color = data.relay_up ? "" : "#e2483b";
 
+  document.getElementById("no-walls").hidden = data.walls.length > 0;
   const wallsEl = document.getElementById("walls");
   wallsEl.innerHTML = "";
   for (const w of data.walls) {
     const p = w.progress || {};
-    const cls = stateClass(w.active_state, w.connected);
     const div = document.createElement("div");
-    div.className = "wall-card " + cls;
+    div.className = "wall-card " + wallClass(w);
     div.innerHTML = `
-      <h3>${w.label}</h3>
+      <h3>${w.wall} <span class="chip">${w.cols}×${w.rows} · ${w.canvas}</span></h3>
+      <div class="wall-row"><span>State</span><span>${summary(w)}</span></div>
       <div class="wall-row"><span>Service</span><span>${w.active_state} (${w.sub_state}), ${w.n_restarts} restarts</span></div>
-      <div class="wall-row"><span>Client</span><span>${w.connected ? "connected / streaming" : "waiting for connection"}</span></div>
-      <div class="wall-row"><span>Frame</span><span>${p.frame ?? "–"}</span></div>
-      <div class="wall-row"><span>Encoder fps</span><span>${p.fps ?? "–"}</span></div>
-      <div class="wall-row"><span>Bitrate</span><span>${p.bitrate ?? "–"}</span></div>
-      <div class="wall-row"><span>Speed</span><span>${p.speed ?? "–"}</span></div>
+      <div class="wall-row"><span>Encoder</span><span>${p.fps ?? "–"} fps · ${p.bitrate ?? "–"} · frame ${p.frame ?? "–"}</span></div>
+      ${readersBlock(w)}
+      ${snapshotBlock(w)}
+      <div class="inline-row" style="margin-top:.6rem">
+        <button type="button" class="secondary" onclick="probeWall('${w.wall}')">Check feeds</button>
+      </div>
+      <div class="test-result pending" id="probe-${w.wall}" hidden></div>
     `;
     wallsEl.appendChild(div);
   }
+}
+
+async function probeWall(wall) {
+  const el = document.getElementById("probe-" + wall);
+  el.hidden = false;
+  el.className = "test-result pending";
+  el.textContent = "Checking each camera… (up to ~10s)";
+  let data;
+  try {
+    const res = await fetch("/api/probe/" + wall, {method: "POST"});
+    data = await res.json();
+  } catch (e) {
+    el.className = "test-result bad";
+    el.textContent = "Probe request failed: " + e;
+    return;
+  }
+  if (data.error && !data.cameras.length) {
+    el.className = "test-result " + (data.cooldown ? "warn" : "bad");
+    el.textContent = data.error;
+    return;
+  }
+  const cls = c => c.reason === "ok" ? "ok"
+                 : (c.reason === "unreachable" ? "bad" : "warn");
+  const cells = data.cameras.map(c => {
+    const d = c.details || {};
+    const detail = c.reason === "ok"
+      ? `${d.codec || "?"} ${d.width || "?"}×${d.height || "?"}${d.fps ? " " + d.fps + "fps" : ""}`
+      : (c.error || c.reason);
+    return `<div class="probe-cell ${cls(c)}">
+        <strong>${c.index + 1}</strong>
+        <div class="probe-url">${c.url}</div>
+        <div class="probe-detail">${detail}</div>
+      </div>`;
+  }).join("");
+  const bad = data.cameras.filter(c => c.reason !== "ok").length;
+  el.className = "test-result " + (bad ? "warn" : "ok");
+  el.innerHTML = `<div style="margin-bottom:.4rem">${bad ? bad + " of " + data.cameras.length + " feeds not OK" : "all " + data.cameras.length + " feeds OK"}
+      <span class="note">(probed over ${data.transport})</span></div>
+    <div class="probe-grid" style="grid-template-columns:repeat(${data.cols || 1},1fr)">${cells}</div>`;
 }
 
 refresh();

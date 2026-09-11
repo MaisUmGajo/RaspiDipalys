@@ -2,8 +2,10 @@
 # Installed as ~videowall/.xinitrc — runs once the videowall user's X server
 # (two screens, :0.0 and :0.1) comes up.
 #
-# No ffmpeg here: the server has already composited each wall into a single
-# stream, so the Pi's only job is decode-and-display, one mpv per screen.
+# No ffmpeg in the display path: the server has already composited each wall
+# into a single stream, so the Pi's only job is decode-and-display, one mpv
+# per screen. Streams are pulled from the server's MediaMTX relay, which is
+# what allows more than one Pi to watch the same wall.
 
 for scr in :0.0 :0.1; do
   xset -display "$scr" s off
@@ -15,36 +17,40 @@ unclutter -idle 0.5 -root &
 
 ENV_FILE=/etc/videowall/pi.env
 
-# One display loop per screen. Each loop RE-SOURCES pi.env on every
-# iteration, so applying a config change from the web UI is simply "kill the
-# mpv processes" — each loop then relaunches mpv with the freshly-read
-# SERVER_HOST/port/latency/hwdec, no X restart or reboot needed.
-run_wall() {
+# One display loop per screen. Each loop RE-SOURCES pi.env on every iteration,
+# so applying a config change from the web UI is simply "kill the mpv
+# processes" — each loop then relaunches with the freshly-read settings, with
+# no X restart or reboot.
+run_output() {
   screen="$1"
-  port_var="$2"
-  default_port="$3"
+  wall_var="$2"
   while true; do
     SERVER_HOST=""
     SRT_LATENCY_MS=""
     HWDEC=""
+    MEDIAMTX_SRT_PORT=""
     # shellcheck disable=SC1090
     [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 
     host="$SERVER_HOST"
-    eval "port=\${${port_var}:-$default_port}"
+    eval "wall=\${${wall_var}:-}"
+    port="${MEDIAMTX_SRT_PORT:-8890}"
     lat="${SRT_LATENCY_MS:-400}"
     hwdec="${HWDEC:-v4l2m2m-copy}"
 
-    if [ -n "$host" ]; then
+    # A wall is identified by name on the relay, so there are no per-wall
+    # ports to keep in sync. An unset wall means "this output is unused" —
+    # leave the screen black rather than spinning on a bogus URL.
+    if [ -n "$host" ] && [ -n "$wall" ]; then
       DISPLAY="$screen" mpv --no-config --fullscreen --no-audio --really-quiet \
         --hwdec="$hwdec" --vo=gpu \
-        "srt://${host}:${port}?mode=caller&latency=${lat}"
+        "srt://${host}:${port}?streamid=read:${wall}&latency=${lat}"
     fi
     sleep 2
   done
 }
 
-run_wall :0.0 PORT_4K 6000 &
-run_wall :0.1 PORT_1080P 6001 &
+run_output :0.0 OUTPUT1_WALL &
+run_output :0.1 OUTPUT2_WALL &
 
 wait
