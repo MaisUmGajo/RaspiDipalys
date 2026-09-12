@@ -47,13 +47,78 @@ CELL_H=$((CANVAS_H / ROWS))
 CELL_W=$((CELL_W - (CELL_W % 2)))
 CELL_H=$((CELL_H - (CELL_H % 2)))
 
+# Probe every source before launching ffmpeg, so one dead camera cannot take
+# down the whole wall.
+#
+# ffmpeg opens ALL of its inputs before producing a single frame, and if any
+# one of them fails the entire process exits ("Error opening input files").
+# Under systemd that becomes an endless restart loop in which nine working
+# cameras display nothing because a tenth is unplugged, on a wall whose whole
+# purpose is to show the cameras that ARE up. So: check each source first and
+# feed a black frame generator in place of any that will not open. That cell
+# goes black and the rest of the wall runs.
+#
+# Probes run in parallel — sequentially, thirteen unreachable cameras at the
+# timeout each would delay startup by minutes.
+PROBE_TIMEOUT_S="${PROBE_TIMEOUT_S:-8}"
+PROBE_DIR="$(mktemp -d)"
+trap 'rm -rf "$PROBE_DIR"' EXIT
+
+for ((i = 0; i < N; i++)); do
+  (
+    if timeout "$PROBE_TIMEOUT_S" ffprobe -v error \
+        -rtsp_transport "$RTSP_TRANSPORT" \
+        -select_streams v:0 -show_entries stream=codec_name \
+        -of csv=p=0 "${URLS[$i]}" >/dev/null 2>&1; then
+      echo ok > "$PROBE_DIR/$i"
+    fi
+  ) &
+done
+wait
+
+DEAD_CELLS=()
+LIVE_COUNT=0
+declare -a SOURCE_OK
+for ((i = 0; i < N; i++)); do
+  if [ -s "$PROBE_DIR/$i" ]; then
+    SOURCE_OK[i]=1
+    LIVE_COUNT=$((LIVE_COUNT + 1))
+  else
+    SOURCE_OK[i]=0
+    # Report positions 1-based, matching the row-major order documented in
+    # the cameras-*.conf files.
+    DEAD_CELLS+=("$((i + 1))")
+  fi
+done
+rm -rf "$PROBE_DIR"
+trap - EXIT
+
+# Only refuse to start when there is genuinely nothing to show. A wall of
+# entirely black cells would look identical to a broken encoder while still
+# burning CPU encoding nothing, so fail loudly instead and let systemd retry.
+if [ "$LIVE_COUNT" -eq 0 ]; then
+  echo "videowall-encode: none of the $N sources in $CAMERAS_FILE are usable — not starting the '$WALL' wall" >&2
+  exit 1
+fi
+
+if [ "${#DEAD_CELLS[@]}" -gt 0 ]; then
+  echo "videowall-encode: '$WALL' starting with $LIVE_COUNT/$N sources live; showing black in cell(s): ${DEAD_CELLS[*]}" >&2
+fi
+
 FFMPEG_ARGS=(-hide_banner -loglevel warning -nostdin)
 if [ "$VAAPI" = "1" ]; then
   FFMPEG_ARGS+=(-vaapi_device /dev/dri/renderD128)
 fi
 
-for url in "${URLS[@]}"; do
-  FFMPEG_ARGS+=(-rtsp_transport "$RTSP_TRANSPORT" -fflags nobuffer -i "$url")
+for ((i = 0; i < N; i++)); do
+  if [ "${SOURCE_OK[i]}" -eq 1 ]; then
+    FFMPEG_ARGS+=(-rtsp_transport "$RTSP_TRANSPORT" -fflags nobuffer -i "${URLS[$i]}")
+  else
+    # -re paces this synthetic source at wall-clock speed. Without it lavfi
+    # generates frames as fast as the CPU allows while the real cameras arrive
+    # in real time, and the filter graph buffers the difference without bound.
+    FFMPEG_ARGS+=(-re -f lavfi -i "color=c=black:s=${CELL_W}x${CELL_H}:r=${FPS}")
+  fi
 done
 
 # Per-input: drop to target fps, scale to fit the cell preserving aspect

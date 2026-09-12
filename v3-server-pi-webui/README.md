@@ -51,6 +51,40 @@ and never need touching again — the web UI (or you, by hand) only ever
 edits the `.env`/`.conf` files in `/etc/videowall/` and restarts the
 corresponding service.
 
+### Unusable cameras show as black cells, they don't stop the wall
+
+ffmpeg opens **all** of its inputs before producing a single frame, so if one
+RTSP source won't open the whole process exits with `Error opening input
+files`. Under systemd that is an endless restart loop in which every working
+camera shows nothing because one camera is unplugged — on a wall whose entire
+job is to display the cameras that are up.
+
+So `videowall-encode.sh` probes each source with `ffprobe` before launching
+ffmpeg (in parallel — thirteen unreachable cameras probed one after another
+would add minutes to startup) and substitutes a black frame generator for any
+that won't open. That cell is black; the rest of the wall runs normally. The
+service log names which cells are affected, using the same 1-based row-major
+positions as the `cameras-*.conf` files:
+
+```
+videowall-encode: '1080p' starting with 2/4 sources live; showing black in cell(s): 3 4
+```
+
+The one case that still refuses to start is when **no** source is usable:
+
+```
+videowall-encode: none of the 4 sources in /etc/videowall/cameras-1080p.conf are usable — not starting the '1080p' wall
+```
+
+An entirely black wall is indistinguishable from a broken encoder while still
+burning CPU encoding nothing, so it exits and lets systemd retry instead.
+
+Two limits worth knowing. The probe is a **snapshot taken at startup**: a
+camera that dies later still takes the encoder down with it (systemd restarts
+it, and the camera becomes a black cell on the next run), and a camera that
+comes back does not reappear until the encoder restarts. Raise
+`PROBE_TIMEOUT_S` (default 8) if slow cameras are being wrongly judged dead.
+
 `videowall-encode.sh` also now passes `-progress /run/videowall/progress-<wall>.txt`
 to ffmpeg, which is how the web UI gets live frame/fps/bitrate numbers —
 see `read_progress()` in `server/webui/app.py`. `/run/videowall` is
