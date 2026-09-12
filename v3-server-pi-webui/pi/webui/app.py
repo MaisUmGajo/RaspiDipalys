@@ -19,8 +19,8 @@ FFPROBE = "/usr/bin/ffprobe"
 
 # The two source streams this Pi displays, and which env key holds each port.
 STREAMS = {
-    "4k": {"label": "4K wall (screen :0.0)", "port_key": "PORT_4K", "default_port": 6000},
-    "1080p": {"label": "1080p wall (screen :0.1)", "port_key": "PORT_1080P", "default_port": 6001},
+    "4k": {"label": "4K wall (left output)", "port_key": "PORT_4K", "default_port": 6000},
+    "1080p": {"label": "1080p wall (right output)", "port_key": "PORT_1080P", "default_port": 6001},
 }
 
 

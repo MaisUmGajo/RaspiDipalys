@@ -27,10 +27,32 @@ small web interface on **both** machines.
 - **Runtime status**: Pi CPU/memory/temperature/uptime and whether each
   screen's display process is currently running.
 
-The Pi's display path (dual-screen Xorg, autologin, mpv) is otherwise the
-same as v2 — the only change is that each display loop now re-reads
-`pi.env` on every reconnect, so the web UI can apply a config change by
-just restarting the mpv processes (no reboot).
+The Pi's display path (Xorg, autologin, mpv) keeps v2's shape, with two
+changes:
+
+- Each display loop re-reads `pi.env` on every reconnect, so the web UI can
+  apply a config change by just restarting the mpv processes (no reboot).
+- **The two screens are no longer separate X screens.** v1 and v2 used
+  "Zaphod mode" — two independent X screens, `:0.0` and `:0.1`, one per
+  HDMI connector. That does not work on a Pi 4's vc4 driver: Xorg either
+  aborts with `Cannot run in framebuffer mode. Please specify busIDs` or
+  silently collapses both outputs into one mirrored screen. v3 instead runs
+  **one X screen spanning both outputs**, laid out left-to-right by xrandr,
+  with each mpv pinned to one output via `--fs-screen`. Behaviour is the
+  same — two independent fullscreen videos, one per display — by a route
+  the hardware actually supports.
+
+Two consequences of that change are worth knowing:
+
+- Per-output resolutions live in `/etc/videowall/display.env`, **not**
+  `pi.env`. The web UI rewrites `pi.env` from a fixed template on every save
+  (`PI_ENV_TEMPLATE` in `pi/webui/app.py`), so a key added there would be
+  dropped the first time anyone pressed Save.
+- Which wall lands on which physical screen follows xrandr's connected-output
+  order, not a configured connector name — swap the HDMI cables to swap the
+  walls. Connector names are deliberately not hardcoded: the kernel reports
+  `HDMI-A-1`/`HDMI-A-2` while Xorg's modesetting driver reports `HDMI-1`/
+  `HDMI-2` for the very same outputs, and a wrong guess fails silently.
 
 ## What changed on the server vs v2
 

@@ -1,26 +1,71 @@
 #!/bin/sh
 # Installed as ~videowall/.xinitrc — runs once the videowall user's X server
-# (two screens, :0.0 and :0.1) comes up.
+# comes up.
 #
 # No ffmpeg here: the server has already composited each wall into a single
 # stream, so the Pi's only job is decode-and-display, one mpv per screen.
+#
+# LAYOUT: there is ONE X screen spanning both HDMI outputs (see
+# /etc/X11/xorg.conf.d/10-dualhead.conf for why Zaphod mode's :0.0 / :0.1
+# pair is not usable on vc4). We lay the outputs out left-to-right with
+# xrandr and then pin one fullscreen mpv to each via --fs-screen.
 
-for scr in :0.0 :0.1; do
-  xset -display "$scr" s off
-  xset -display "$scr" -dpms
-  xset -display "$scr" s noblank
-done
+# Connector names are NOT hardcoded. The kernel calls a Pi 4's outputs
+# HDMI-A-1 / HDMI-A-2 while Xorg's modesetting driver reports the same
+# outputs as HDMI-1 / HDMI-2, and older drivers differ again. Guessing wrong
+# silently yields a mirrored or blank screen, so ask xrandr what is actually
+# connected and use that, in the order it reports.
+OUT_A=$(xrandr --query | awk '/ connected/ {print $1; exit}')
+OUT_B=$(xrandr --query | awk '/ connected/ {print $1}' | sed -n '2p')
+
+# Modes come from /etc/videowall/display.env (NOT pi.env — the web UI
+# rewrites that file from a fixed template and would drop these keys).
+DISPLAY_ENV=/etc/videowall/display.env
+DISPLAY_MODE_A=""
+DISPLAY_MODE_B=""
+# shellcheck disable=SC1090
+[ -f "$DISPLAY_ENV" ] && . "$DISPLAY_ENV"
+
+# Position with --right-of rather than computing pixel offsets by hand: one
+# bad --pos argument makes the whole xrandr call fail, and the failure is
+# invisible — both outputs simply stay stacked at +0+0, i.e. mirrored.
+#
+# Each output is configured with its requested mode, falling back to --auto
+# if that mode is unavailable, so an unexpected panel still lights up.
+set_output() {
+  out="$1"; mode="$2"; shift 2
+  if [ -n "$mode" ] && xrandr --output "$out" --mode "$mode" "$@" 2>/dev/null; then
+    return 0
+  fi
+  xrandr --output "$out" --auto "$@"
+}
+
+if [ -n "$OUT_A" ]; then
+  set_output "$OUT_A" "$DISPLAY_MODE_A" --pos 0x0 --primary
+fi
+if [ -n "$OUT_B" ]; then
+  set_output "$OUT_B" "$DISPLAY_MODE_B" --right-of "$OUT_A"
+fi
+
+# Blanking/DPMS off: this is an always-on appliance.
+xset s off
+xset -dpms
+xset s noblank
 
 unclutter -idle 0.5 -root &
 
 ENV_FILE=/etc/videowall/pi.env
 
-# One display loop per screen. Each loop RE-SOURCES pi.env on every
+# One display loop per output. Each loop RE-SOURCES pi.env on every
 # iteration, so applying a config change from the web UI is simply "kill the
 # mpv processes" — each loop then relaunches mpv with the freshly-read
 # SERVER_HOST/port/latency/hwdec, no X restart or reboot needed.
+#
+# --fs-screen pins each mpv to one physical output of the shared screen. The
+# indices follow the left-to-right order established by the xrandr call
+# above, so screen 0 is OUT_A and screen 1 is OUT_B.
 run_wall() {
-  screen="$1"
+  fs_screen="$1"
   port_var="$2"
   default_port="$3"
   while true; do
@@ -36,7 +81,8 @@ run_wall() {
     hwdec="${HWDEC:-v4l2m2m-copy}"
 
     if [ -n "$host" ]; then
-      DISPLAY="$screen" mpv --no-config --fullscreen --no-audio --really-quiet \
+      mpv --no-config --fullscreen --fs-screen="$fs_screen" \
+        --no-audio --really-quiet \
         --hwdec="$hwdec" --vo=gpu \
         "srt://${host}:${port}?mode=caller&latency=${lat}"
     fi
@@ -44,7 +90,7 @@ run_wall() {
   done
 }
 
-run_wall :0.0 PORT_4K 6000 &
-run_wall :0.1 PORT_1080P 6001 &
+run_wall 0 PORT_4K 6000 &
+[ -n "$OUT_B" ] && run_wall 1 PORT_1080P 6001 &
 
 wait
