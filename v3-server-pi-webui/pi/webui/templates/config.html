@@ -58,7 +58,7 @@
         {% set cur = env.get('HWDEC', 'v4l2m2m-copy') %}
         <option value="v4l2m2m-copy" {{ 'selected' if cur == 'v4l2m2m-copy' }}>v4l2m2m-copy (safe default)</option>
         <option value="v4l2m2m" {{ 'selected' if cur == 'v4l2m2m' }}>v4l2m2m (zero-copy, lower CPU)</option>
-        <option value="auto" {{ 'selected' if cur == 'auto' }}>auto</option>
+        <option value="auto" {{ 'selected' if cur == 'auto' }}>auto (does NOT use the Pi decoder)</option>
         <option value="no" {{ 'selected' if cur == 'no' }}>no (software decode)</option>
       </select>
     </label>

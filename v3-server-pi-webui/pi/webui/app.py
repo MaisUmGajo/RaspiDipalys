@@ -62,8 +62,38 @@ def stream_url(env, wall):
 
 # ---------- display status ----------
 
+HEALTH_FILE = Path("/run/videowall/health.json")
+# Health older than this means the watchdog isn't running (or is wedged), so
+# the numbers in the file are history, not status.
+HEALTH_STALE_AFTER_S = 60
+
+
+def read_health():
+    """Stream health published by the watchdog.
+
+    The watchdog runs in the display session (user videowall) and owns the mpv
+    IPC sockets; this app runs as videowall-web and just reads its output. That
+    avoids giving the web UI access to mpv's control socket, which would let a
+    web request drive the player.
+    """
+    try:
+        data = json.loads(HEALTH_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "outputs" not in data:
+        return None
+    data["age_s"] = round(time.time() - float(data.get("updated", 0)), 1)
+    data["stale"] = data["age_s"] > HEALTH_STALE_AFTER_S
+    return data
+
+
 def mpv_running_for(wall):
-    """True if an mpv process is currently pulling this wall."""
+    """True if an mpv process is currently pulling this wall.
+
+    Kept as a fallback for when the watchdog is disabled or its health file is
+    missing. On its own this only proves a process exists — it stays true for
+    a stream that froze hours ago, which is exactly why the watchdog exists.
+    """
     if not wall:
         return False
     needle = f"streamid=read:{wall}"
@@ -133,19 +163,44 @@ def dashboard():
 @app.route("/api/status")
 def api_status():
     env = parse_env_file(PI_ENV)
+    health = read_health()
+    hout = (health or {}).get("outputs", {})
+    watchdog_live = bool(health) and not health.get("stale")
+
     outputs = []
     for key, meta in OUTPUTS.items():
         wall = env.get(meta["key"], "")
-        outputs.append({
+        entry = {
             "output": key,
             "label": meta["label"],
             "wall": wall,
             "displaying": mpv_running_for(wall),
-        })
+        }
+        h = hout.get(key) if watchdog_live else None
+        if h:
+            # Real stream health, measured over mpv's IPC socket.
+            entry.update({
+                "state": h.get("state"),
+                "time_pos": h.get("time_pos"),
+                "rate": h.get("rate"),
+                "reconnects": h.get("reconnects"),
+                "last_reason": h.get("last_reason"),
+                "strikes": h.get("strikes"),
+            })
+        else:
+            # Fall back to process existence, and say so rather than dressing
+            # it up as stream health.
+            entry["state"] = "unmonitored"
+        outputs.append(entry)
+
     return jsonify({
         "pi": pi_stats(),
         "server_host": env.get("SERVER_HOST", ""),
         "srt_port": env.get("MEDIAMTX_SRT_PORT", "8890"),
+        "watchdog": {
+            "live": watchdog_live,
+            "age_s": (health or {}).get("age_s"),
+        },
         "outputs": outputs,
     })
 

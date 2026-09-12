@@ -165,17 +165,33 @@ COMMON_FILES=("$COMMON_DIR"/*.py)
 shopt -u nullglob
 [ "${#COMMON_FILES[@]}" -gt 0 ] || die "No .py files in $COMMON_DIR — the clone looks incomplete."
 
-install -d -m 755 /opt/videowall/webui
+install -d -m 755 /opt/videowall/webui /opt/videowall/bin
 # Glob-free: copies dotfiles too and cannot fail on an unexpanded wildcard.
 cp -r "$REPO_DIR/webui/." /opt/videowall/webui/
 # Shared helpers (source prober, env parsing, auth), kept in one place so a
 # fix reaches both the server and the Pi.
 install -m 644 "${COMMON_FILES[@]}" /opt/videowall/webui/
 chown -R "$VW_WEB_USER:$VW_GROUP" /opt/videowall/webui
-for f in app.py probe.py vwcommon.py templates/index.html templates/config.html; do
+for f in app.py probe.py vwcommon.py mpvipc.py templates/index.html templates/config.html; do
   [ -f "/opt/videowall/webui/$f" ] || die "Deploy incomplete: /opt/videowall/webui/$f is missing."
 done
 info "deployed $(find /opt/videowall/webui -type f | wc -l) files"
+
+step "Installing the stream watchdog"
+# Reconnects streams that froze, degraded, or went corrupt — none of which
+# make mpv exit, so the display loops alone would never notice them. Runs
+# inside the display session (see .xinitrc), so it needs no service of its own
+# and no privileges.
+install -m 755 -o root -g root "$REPO_DIR/bin/videowall-watchdog.py" \
+  /opt/videowall/bin/videowall-watchdog.py
+# Shared runtime dir for the mpv IPC sockets and the health file the web UI
+# reads. /run is not writable by either account, so systemd-tmpfiles creates
+# it on each boot with the display user as owner.
+install -m 644 "$REPO_DIR/config/tmpfiles-videowall.conf" /etc/tmpfiles.d/videowall.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/videowall.conf \
+  || warn "systemd-tmpfiles could not create /run/videowall now; it will be
+    created on the next boot. The watchdog falls back to XDG_RUNTIME_DIR."
+info "watchdog installed; tune it via WATCHDOG_* settings in /etc/videowall/pi.env"
 
 step "Generating credentials"
 if [ ! -f /etc/videowall/webui.env ]; then

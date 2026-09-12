@@ -17,18 +17,29 @@ unclutter -idle 0.5 -root &
 
 ENV_FILE=/etc/videowall/pi.env
 
+# Runtime dir for the mpv IPC sockets and the watchdog's health file. Created
+# by tmpfiles.d (owned by this user) so the web UI, which runs as a different
+# account, can read the health file. Fall back for manual runs.
+RUN_DIR=/run/videowall
+if ! mkdir -p "$RUN_DIR" 2>/dev/null || [ ! -w "$RUN_DIR" ]; then
+  RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/videowall"
+  mkdir -p "$RUN_DIR"
+fi
+
 # One display loop per screen. Each loop RE-SOURCES pi.env on every iteration,
 # so applying a config change from the web UI is simply "kill the mpv
 # processes" — each loop then relaunches with the freshly-read settings, with
 # no X restart or reboot.
 run_output() {
   screen="$1"
-  wall_var="$2"
+  output="$2"
+  wall_var="$3"
   while true; do
     SERVER_HOST=""
     SRT_LATENCY_MS=""
     HWDEC=""
     MEDIAMTX_SRT_PORT=""
+    NET_TIMEOUT_S=""
     # shellcheck disable=SC1090
     [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 
@@ -37,20 +48,38 @@ run_output() {
     port="${MEDIAMTX_SRT_PORT:-8890}"
     lat="${SRT_LATENCY_MS:-400}"
     hwdec="${HWDEC:-v4l2m2m-copy}"
+    nettimeout="${NET_TIMEOUT_S:-30}"
 
     # A wall is identified by name on the relay, so there are no per-wall
     # ports to keep in sync. An unset wall means "this output is unused" —
     # leave the screen black rather than spinning on a bogus URL.
     if [ -n "$host" ] && [ -n "$wall" ]; then
+      # --input-ipc-server is what makes this player observable: without it
+      # the only health signal is "the process exists", which stays true for a
+      # stream that froze hours ago. The watchdog uses this socket to measure
+      # playback and to reconnect in place.
+      # --network-timeout makes mpv give up on a dead connection instead of
+      # hanging on it forever, so the loop can retry.
       DISPLAY="$screen" mpv --no-config --fullscreen --no-audio --really-quiet \
         --hwdec="$hwdec" --vo=gpu \
+        --input-ipc-server="$RUN_DIR/mpv-${output}.sock" \
+        --network-timeout="$nettimeout" \
         "srt://${host}:${port}?streamid=read:${wall}&latency=${lat}"
     fi
+    rm -f "$RUN_DIR/mpv-${output}.sock"
     sleep 2
   done
 }
 
-run_output :0.0 OUTPUT1_WALL &
-run_output :0.1 OUTPUT2_WALL &
+run_output :0.0 1 OUTPUT1_WALL &
+run_output :0.1 2 OUTPUT2_WALL &
+
+# Self-heal watchdog: reconnects streams that froze, degraded below a fraction
+# of real time, or went corrupt — none of which make mpv exit, so the display
+# loops above would never notice them. Also publishes the health file the web
+# UI reads.
+if [ -x /opt/videowall/bin/videowall-watchdog.py ]; then
+  /opt/videowall/bin/videowall-watchdog.py &
+fi
 
 wait

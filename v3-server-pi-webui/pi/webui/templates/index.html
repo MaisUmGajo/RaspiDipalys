@@ -11,13 +11,15 @@
 </section>
 
 <h2>Outputs</h2>
-<p class="note">Relay: <strong id="server-host">–</strong></p>
+<p class="note">Relay: <strong id="server-host">–</strong> · watchdog:
+  <strong id="watchdog-state">–</strong></p>
 <div id="outputs"></div>
 
-<p class="note">Refreshes every 3s. "Displaying" means an mpv process is
-running for that output's wall — it does not by itself prove the stream is
-arriving. Use <a href="{{ url_for('config') }}">Config &amp; test</a> to probe
-a source.</p>
+<p class="note">Refreshes every 3s. Stream state is measured over mpv's IPC
+socket by the watchdog — a frozen or degraded stream is detected and
+reconnected automatically. If the watchdog isn't running, state falls back to
+"unmonitored", which only means the process exists. Use
+<a href="{{ url_for('config') }}">Config &amp; test</a> to probe a source.</p>
 
 <script>
 async function refresh() {
@@ -36,19 +38,57 @@ async function refresh() {
 
   document.getElementById("server-host").textContent =
     data.server_host ? `${data.server_host}:${data.srt_port}` : "(not set)";
+  const wd = document.getElementById("watchdog-state");
+  wd.textContent = data.watchdog.live
+    ? `running (${data.watchdog.age_s}s ago)` : "not running";
+  wd.style.color = data.watchdog.live ? "" : "#e2b93b";
+
+  // How each measured state should read, and how alarming it looks.
+  const STATES = {
+    playing:           ["playing",                  "state-good"],
+    degraded:          ["DEGRADED — running slow",  "state-warn"],
+    reconnecting:      ["reconnecting…",            "state-warn"],
+    starting:          ["starting…",                "state-warn"],
+    idle:              ["idle — nothing loaded",    "state-warn"],
+    no_timepos:        ["no playback position yet", "state-warn"],
+    no_wall:           ["no wall assigned",         "state-off"],
+    watchdog_disabled: ["watchdog disabled",        "state-off"],
+    error:             ["watchdog error",           "state-bad"],
+  };
 
   const el = document.getElementById("outputs");
   el.innerHTML = "";
   for (const o of data.outputs) {
-    const unused = !o.wall;
-    const cls = unused ? "state-off" : (o.displaying ? "state-good" : "state-warn");
+    let label, cls;
+    if (o.state === "unmonitored") {
+      // Be explicit that this is process-existence, not stream health.
+      label = o.wall ? (o.displaying ? "process running (unmonitored)" : "not running")
+                     : "no wall assigned";
+      cls = !o.wall ? "state-off" : (o.displaying ? "state-warn" : "state-bad");
+    } else {
+      [label, cls] = STATES[o.state] || [o.state, "state-warn"];
+    }
+
+    const rows = [
+      `<div class="wall-row"><span>Wall</span><span>${o.wall || "(unused)"}</span></div>`,
+      `<div class="wall-row"><span>Status</span><span>${label}</span></div>`,
+    ];
+    if (o.rate !== null && o.rate !== undefined) {
+      rows.push(`<div class="wall-row"><span>Playback rate</span><span>${o.rate}× real time${o.strikes ? ` (${o.strikes} slow checks)` : ""}</span></div>`);
+    }
+    if (o.time_pos !== null && o.time_pos !== undefined) {
+      rows.push(`<div class="wall-row"><span>Stream position</span><span>${o.time_pos}s</span></div>`);
+    }
+    if (o.reconnects) {
+      rows.push(`<div class="wall-row"><span>Auto-reconnects</span><span>${o.reconnects}</span></div>`);
+      if (o.last_reason) {
+        rows.push(`<div class="wall-row"><span>Last reason</span><span>${o.last_reason}</span></div>`);
+      }
+    }
+
     const div = document.createElement("div");
     div.className = "wall-card " + cls;
-    div.innerHTML = `
-      <h3>${o.label}</h3>
-      <div class="wall-row"><span>Wall</span><span>${o.wall || "(unused)"}</span></div>
-      <div class="wall-row"><span>Status</span><span>${unused ? "no wall assigned" : (o.displaying ? "displaying" : "not running")}</span></div>
-    `;
+    div.innerHTML = `<h3>${o.label}</h3>` + rows.join("");
     el.appendChild(div);
   }
 }
