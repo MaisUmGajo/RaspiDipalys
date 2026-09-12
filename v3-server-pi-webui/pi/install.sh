@@ -83,7 +83,12 @@ cp -r "$REPO_DIR/webui/"* /opt/videowall/webui/
 chown -R "$VW_WEB_USER:$VW_GROUP" /opt/videowall/webui
 
 if [ ! -f /etc/videowall/webui.env ]; then
-  WEBUI_PASSWORD="$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 20)"
+  # Not `tr -dc ... < /dev/urandom | head -c 20`: head exits after 20 bytes,
+  # tr dies of SIGPIPE, and `set -o pipefail` + `set -e` then abort the whole
+  # install right here — leaving the machine half-provisioned (files deployed,
+  # but no credentials, sudoers rule or systemd units). python3 is already a
+  # hard dependency of the next line.
+  WEBUI_PASSWORD="$(python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))')"
   PASSWORD_HASH="$(python3 -c "import sys; from werkzeug.security import generate_password_hash; print(generate_password_hash(sys.argv[1]))" "$WEBUI_PASSWORD")"
   {
     echo "WEBUI_USER=admin"
