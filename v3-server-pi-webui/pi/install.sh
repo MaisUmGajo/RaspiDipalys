@@ -21,8 +21,32 @@ apt-get update
 apt-get install -y \
   xserver-xorg xserver-xorg-legacy x11-xserver-utils xinit \
   mpv unclutter \
-  libraspberrypi-bin \
   ffmpeg python3-flask python3-psutil gunicorn sudo
+
+# vcgencmd — for `measure_temp` / `get_throttled` while hand-tuning — ships in
+# libraspberrypi-bin on Bookworm, which Trixie replaced with raspi-utils-core.
+# Nothing here needs it at runtime (the web UI reads the temperature straight
+# from /sys/class/thermal), so install whichever the running release offers and
+# carry on if neither is available, rather than failing the whole install over
+# an optional diagnostic.
+# `apt-cache show` is not the test to use here: on Trixie it still succeeds for
+# libraspberrypi-bin (other packages reference it), while `apt-get install` then
+# fails with "has no installation candidate". Check for a real candidate version.
+VCGENCMD_PKG=""
+for pkg in libraspberrypi-bin raspi-utils-core; do
+  if [ "$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2}')" != "" ] &&
+     [ "$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2}')" != "(none)" ]; then
+    VCGENCMD_PKG="$pkg"
+    break
+  fi
+done
+if [ -n "$VCGENCMD_PKG" ]; then
+  apt-get install -y "$VCGENCMD_PKG"
+  echo "    installed $VCGENCMD_PKG (provides vcgencmd)"
+else
+  echo "    note: no vcgencmd package available on this release — thermal/throttling"
+  echo "          diagnostics won't be available, but nothing here needs them."
+fi
 
 GUNICORN_BIN="$(command -v gunicorn3 || command -v gunicorn || true)"
 if [ -z "$GUNICORN_BIN" ]; then
