@@ -1,17 +1,58 @@
 #!/bin/sh
 # Installed as ~videowall/.xinitrc — runs once the videowall user's X server
-# (two screens, :0.0 and :0.1) comes up.
+# comes up.
 #
 # No ffmpeg in the display path: the server has already composited each wall
 # into a single stream, so the Pi's only job is decode-and-display, one mpv
-# per screen. Streams are pulled from the server's MediaMTX relay, which is
+# per output. Streams are pulled from the server's MediaMTX relay, which is
 # what allows more than one Pi to watch the same wall.
+#
+# LAYOUT: there is ONE X screen spanning both HDMI outputs (see
+# /etc/X11/xorg.conf.d/10-dualhead.conf for why Zaphod mode's :0.0 / :0.1
+# pair is not usable on vc4). We lay the outputs out left-to-right with
+# xrandr and then pin one fullscreen mpv to each via --fs-screen.
 
-for scr in :0.0 :0.1; do
-  xset -display "$scr" s off
-  xset -display "$scr" -dpms
-  xset -display "$scr" s noblank
-done
+# Connector names are NOT hardcoded. The kernel calls a Pi 4's outputs
+# HDMI-A-1 / HDMI-A-2 while Xorg's modesetting driver reports the same
+# outputs as HDMI-1 / HDMI-2, and older drivers differ again. Guessing wrong
+# silently yields a mirrored or blank screen, so ask xrandr what is actually
+# connected and use that, in the order it reports.
+OUT_A=$(xrandr --query | awk '/ connected/ {print $1; exit}')
+OUT_B=$(xrandr --query | awk '/ connected/ {print $1}' | sed -n '2p')
+
+# Modes come from /etc/videowall/display.env (NOT pi.env — the web UI
+# rewrites that file from a fixed template and would drop these keys).
+DISPLAY_ENV=/etc/videowall/display.env
+DISPLAY_MODE_A=""
+DISPLAY_MODE_B=""
+# shellcheck disable=SC1090
+[ -f "$DISPLAY_ENV" ] && . "$DISPLAY_ENV"
+
+# Position with --right-of rather than computing pixel offsets by hand: one
+# bad --pos argument makes the whole xrandr call fail, and the failure is
+# invisible — both outputs simply stay stacked at +0+0, i.e. mirrored.
+#
+# Each output is configured with its requested mode, falling back to --auto
+# if that mode is unavailable, so an unexpected panel still lights up.
+set_output() {
+  out="$1"; mode="$2"; shift 2
+  if [ -n "$mode" ] && xrandr --output "$out" --mode "$mode" "$@" 2>/dev/null; then
+    return 0
+  fi
+  xrandr --output "$out" --auto "$@"
+}
+
+if [ -n "$OUT_A" ]; then
+  set_output "$OUT_A" "$DISPLAY_MODE_A" --pos 0x0 --primary
+fi
+if [ -n "$OUT_B" ]; then
+  set_output "$OUT_B" "$DISPLAY_MODE_B" --right-of "$OUT_A"
+fi
+
+# Blanking/DPMS off: this is an always-on appliance.
+xset s off
+xset -dpms
+xset s noblank
 
 unclutter -idle 0.5 -root &
 
@@ -26,12 +67,18 @@ if ! mkdir -p "$RUN_DIR" 2>/dev/null || [ ! -w "$RUN_DIR" ]; then
   mkdir -p "$RUN_DIR"
 fi
 
-# One display loop per screen. Each loop RE-SOURCES pi.env on every iteration,
+# One display loop per output. Each loop RE-SOURCES pi.env on every iteration,
 # so applying a config change from the web UI is simply "kill the mpv
 # processes" — each loop then relaunches with the freshly-read settings, with
 # no X restart or reboot.
+#
+# fs_screen pins each mpv to one physical output of the shared X screen; the
+# indices follow the left-to-right order established by the xrandr call above,
+# so 0 is OUT_A and 1 is OUT_B. output is the 1-based output number, used only
+# to name this player's IPC socket — the watchdog looks for mpv-1/mpv-2, so it
+# stays independent of the fs-screen index.
 run_output() {
-  screen="$1"
+  fs_screen="$1"
   output="$2"
   wall_var="$3"
   while true; do
@@ -60,7 +107,8 @@ run_output() {
       # playback and to reconnect in place.
       # --network-timeout makes mpv give up on a dead connection instead of
       # hanging on it forever, so the loop can retry.
-      DISPLAY="$screen" mpv --no-config --fullscreen --no-audio --really-quiet \
+      mpv --no-config --fullscreen --fs-screen="$fs_screen" \
+        --no-audio --really-quiet \
         --hwdec="$hwdec" --vo=gpu \
         --input-ipc-server="$RUN_DIR/mpv-${output}.sock" \
         --network-timeout="$nettimeout" \
@@ -71,8 +119,10 @@ run_output() {
   done
 }
 
-run_output :0.0 1 OUTPUT1_WALL &
-run_output :0.1 2 OUTPUT2_WALL &
+run_output 0 1 OUTPUT1_WALL &
+# Only start the second loop if a second output is actually connected —
+# --fs-screen=1 would otherwise refer to a screen that does not exist.
+[ -n "$OUT_B" ] && run_output 1 2 OUTPUT2_WALL &
 
 # Self-heal watchdog: reconnects streams that froze, degraded below a fraction
 # of real time, or went corrupt — none of which make mpv exit, so the display

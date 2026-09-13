@@ -125,8 +125,37 @@ def read_global_env():
     return parse_env_file(ETC / "videowall-server.env")
 
 
+# Keys this form owns. Anything else in the file was put there by hand and
+# must survive a save.
+#
+# This set MUST list exactly what GLOBAL_ENV_TEMPLATE above writes. A key in
+# the template but missing here would be preserved *and* re-emitted, appearing
+# twice in the file; a key here but not in the template would be dropped.
+GLOBAL_ENV_MANAGED_KEYS = {
+    "RTSP_TRANSPORT", "SRT_LATENCY_MS", "VAAPI",
+    "MEDIAMTX_RTSP_HOST", "MEDIAMTX_RTSP_PORT", "MEDIAMTX_API",
+    "SNAPSHOT", "SNAPSHOT_WIDTH", "SNAPSHOT_INTERVAL_S",
+}
+
+
 def write_global_env(data):
-    (ETC / "videowall-server.env").write_text(GLOBAL_ENV_TEMPLATE.format(**data))
+    """Rewrite videowall-server.env, preserving settings the UI doesn't manage.
+
+    This file is rendered from a fixed template, so without this any key the
+    form doesn't know about would be silently deleted the first time someone
+    pressed Save — including HWACCEL, which is what selects the hardware
+    encoder. Losing it would quietly drop a machine back to software encoding,
+    which on a 4K wall means falling behind realtime until the encoder is
+    OOM-killed. Carry unknown keys through instead.
+    """
+    path = ETC / "videowall-server.env"
+    preserved = {k: v for k, v in parse_env_file(path).items()
+                 if k not in GLOBAL_ENV_MANAGED_KEYS}
+    content = GLOBAL_ENV_TEMPLATE.format(**data)
+    if preserved:
+        content += "\n# Settings the web UI does not manage, preserved from the previous file.\n"
+        content += "".join(f"{k}={v}\n" for k, v in sorted(preserved.items()))
+    path.write_text(content)
 
 
 def write_cameras(path_str, urls):

@@ -20,10 +20,13 @@ PI_ENV = ETC / "pi.env"
 SUDO = "/usr/bin/sudo"
 PKILL = "/usr/bin/pkill"
 
-# The Pi 4 has exactly two HDMI outputs, each its own X screen.
+# The Pi 4 has exactly two HDMI outputs. They are NOT separate X screens:
+# ~videowall/.xinitrc lays them out left-to-right on one spanning screen and
+# pins an mpv to each with --fs-screen, because Zaphod mode does not work on
+# vc4. Label them by position, not by a ":0.0"/":0.1" that does not exist.
 OUTPUTS = {
-    "1": {"label": "Output 1 — HDMI0 (screen :0.0)", "key": "OUTPUT1_WALL"},
-    "2": {"label": "Output 2 — HDMI1 (screen :0.1)", "key": "OUTPUT2_WALL"},
+    "1": {"label": "Output 1 — HDMI0 (left)", "key": "OUTPUT1_WALL"},
+    "2": {"label": "Output 2 — HDMI1 (right)", "key": "OUTPUT2_WALL"},
 }
 
 WALL_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")

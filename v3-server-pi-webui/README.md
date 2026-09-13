@@ -41,6 +41,66 @@ diagnostics.
 the server actually offers, test a source before applying, and see per-output
 status.
 
+**One X screen spanning both outputs, not two.** v1 and v2 used "Zaphod mode"
+— two independent X screens, `:0.0` and `:0.1`, one per HDMI connector. That
+does not work on a Pi 4's vc4 driver: Xorg either aborts with `Cannot run in
+framebuffer mode. Please specify busIDs` or silently collapses both outputs
+into one mirrored screen. v3 runs **one screen spanning both outputs**, laid
+out left-to-right by xrandr, with each mpv pinned to one output via
+`--fs-screen`. Behaviour is the same — two independent fullscreen videos, one
+per display — by a route the hardware actually supports.
+
+Two consequences of that are worth knowing:
+
+- Per-output resolutions live in `/etc/videowall/display.env`, **not**
+  `pi.env`. The web UI rewrites `pi.env` from a fixed template on every save
+  (`PI_ENV_TEMPLATE` in `pi/webui/app.py`), so a key added there would be
+  dropped the first time anyone pressed Save.
+- Which wall lands on which physical screen follows xrandr's connected-output
+  order, not a configured connector name — swap the HDMI cables to swap the
+  walls. Connector names are deliberately not hardcoded: the kernel reports
+  `HDMI-A-1`/`HDMI-A-2` while Xorg's modesetting driver reports `HDMI-1`/
+  `HDMI-2` for the very same outputs, and a wrong guess fails silently.
+
+### Unusable cameras show as black cells, they don't stop the wall
+
+ffmpeg opens **all** of its inputs before producing a single frame, so if one
+RTSP source won't open the whole process exits with `Error opening input
+files`. Under systemd that is an endless restart loop in which every working
+camera shows nothing because one camera is unplugged — on a wall whose entire
+job is to display the cameras that are up.
+
+So `videowall-encode.sh` probes each source with `ffprobe` before launching
+ffmpeg (in parallel — thirteen unreachable cameras probed one after another
+would add minutes to startup) and substitutes a black frame generator for any
+that won't open. That cell is black; the rest of the wall runs normally. The
+service log names which cells are affected, using the same 1-based row-major
+positions as the `cameras-*.conf` files:
+
+```
+videowall-encode: '1080p' starting with 2/4 sources live; showing black in cell(s): 3 4
+```
+
+The one case that still refuses to start is when **no** source is usable:
+
+```
+videowall-encode: none of the 4 sources in /etc/videowall/cameras-1080p.conf are usable — not starting the '1080p' wall
+```
+
+An entirely black wall is indistinguishable from a broken encoder while still
+burning CPU encoding nothing, so it exits and lets systemd retry instead.
+
+Two limits worth knowing. The probe is a **snapshot taken at startup**: a
+camera that dies later still takes the encoder down with it (systemd restarts
+it, and the camera becomes a black cell on the next run), and a camera that
+comes back does not reappear until the encoder restarts. Raise
+`PROBE_TIMEOUT_S` (default 8) if slow cameras are being wrongly judged dead.
+
+`videowall-encode.sh` also now passes `-progress /run/videowall/progress-<wall>.txt`
+to ffmpeg, which is how the web UI gets live frame/fps/bitrate numbers —
+see `read_progress()` in `server/webui/app.py`. `/run/videowall` is
+created automatically by the systemd units' `RuntimeDirectory=` directive.
+
 ## The server web UI
 
 - `/` — dashboard, polling `/api/status` every 3s: server stats, and per wall
