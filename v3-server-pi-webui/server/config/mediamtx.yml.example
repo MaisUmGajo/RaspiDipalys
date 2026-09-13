@@ -1,0 +1,59 @@
+# MediaMTX configuration for the video wall relay.
+# Installed to /etc/videowall/mediamtx.yml.
+#
+# Why a relay at all: a raw ffmpeg SRT listener accepts exactly ONE
+# connection, so only one Pi could ever watch a wall. MediaMTX takes a single
+# publish from each encoder and fans it out to any number of subscribers, who
+# can come and go independently without disturbing the encoder.
+#
+# Flow:  videowall-encode.sh  --RTSP over loopback-->  MediaMTX  --SRT-->  Pis
+#
+# MediaMTX remuxes; it does not re-encode, so this costs almost no CPU.
+#
+# SCHEMA NOTE: this targets MediaMTX v1.x. Its config keys have changed across
+# major versions, and MediaMTX validates its config on startup and refuses to
+# run on unknown keys — so a mismatch shows up immediately in
+# `journalctl -u mediamtx`. The release tarball ships its own reference
+# mediamtx.yml, which install.sh keeps at /etc/videowall/mediamtx.reference.yml
+# for diffing if you bump the pinned version.
+
+logLevel: info
+
+# Read-only HTTP API, bound to loopback. The web UI queries this for real
+# per-client stats (address, uptime, bytes) instead of inferring "is a client
+# connected" from a file's timestamp.
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# RTSP is the PUBLISH leg and is bound to loopback deliberately: the encoders
+# run on this host, and nothing off-box should be able to publish. Restricting
+# by bind address rather than by auth rules keeps this config free of the
+# version-sensitive auth keys.
+rtsp: yes
+rtspAddress: 127.0.0.1:8554
+
+# SRT is the READ leg, reachable by the Pi clients. SRT (rather than plain
+# RTSP) for this hop because its ARQ loss recovery is what makes a cross-site
+# Tailscale link watchable. Clients subscribe with:
+#   srt://<server>:8890?streamid=read:<wall>&latency=<ms>
+srt: yes
+srtAddress: :8890
+
+# Everything else off — smaller attack surface, and nothing here needs them.
+rtmp: no
+hls: no
+webrtc: no
+
+# Accept any path name; each wall publishes under its own slug.
+# (On MediaMTX versions older than v1.x this key was named `all` rather than
+# `all_others`.)
+paths:
+  all_others:
+
+# NOTE ON READ ACCESS: subscribing is unauthenticated, which is fine while
+# port 8890 is only reachable over Tailscale (see the firewall guidance in
+# README.md) but is NOT safe to expose to the internet. Someone on the tailnet
+# could also publish a junk path over SRT; they cannot hijack a wall, because
+# MediaMTX refuses a second publisher for an already-published path. If you
+# want credentials on the read leg, add MediaMTX's auth configuration for your
+# pinned version and set MEDIAMTX_READ_USER/MEDIAMTX_READ_PASS on the clients.

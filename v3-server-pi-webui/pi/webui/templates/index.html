@@ -10,14 +10,16 @@
   <div class="card"><div class="card-label">Uptime</div><div class="card-value" id="stat-uptime">–</div></div>
 </section>
 
-<h2>Displays</h2>
-<p class="note">Source server: <strong id="server-host">–</strong></p>
-<div id="walls"></div>
+<h2>Outputs</h2>
+<p class="note">Relay: <strong id="server-host">–</strong> · watchdog:
+  <strong id="watchdog-state">–</strong></p>
+<div id="outputs"></div>
 
-<p class="note">Refreshes every 3s. "Displaying" means an mpv process is
-currently running for that screen's stream — it does not by itself prove the
-server is reachable; use the <a href="{{ url_for('config') }}">Config &amp;
-test</a> page to probe a source.</p>
+<p class="note">Refreshes every 3s. Stream state is measured over mpv's IPC
+socket by the watchdog — a frozen or degraded stream is detected and
+reconnected automatically. If the watchdog isn't running, state falls back to
+"unmonitored", which only means the process exists. Use
+<a href="{{ url_for('config') }}">Config &amp; test</a> to probe a source.</p>
 
 <script>
 async function refresh() {
@@ -31,23 +33,63 @@ async function refresh() {
   document.getElementById("stat-mem").textContent = s.mem_percent.toFixed(0) + "%";
   document.getElementById("stat-load").textContent = s.load_avg.map(x => x.toFixed(2)).join(" / ");
   document.getElementById("stat-temp").textContent = s.temp_c !== null ? s.temp_c + "°C" : "n/a";
-  const h = Math.floor(s.uptime_s / 3600);
-  const d = Math.floor(h / 24);
+  const h = Math.floor(s.uptime_s / 3600), d = Math.floor(h / 24);
   document.getElementById("stat-uptime").textContent = d > 0 ? d + "d " + (h % 24) + "h" : h + "h";
 
-  document.getElementById("server-host").textContent = data.server_host || "(not set)";
+  document.getElementById("server-host").textContent =
+    data.server_host ? `${data.server_host}:${data.srt_port}` : "(not set)";
+  const wd = document.getElementById("watchdog-state");
+  wd.textContent = data.watchdog.live
+    ? `running (${data.watchdog.age_s}s ago)` : "not running";
+  wd.style.color = data.watchdog.live ? "" : "#e2b93b";
 
-  const wallsEl = document.getElementById("walls");
-  wallsEl.innerHTML = "";
-  for (const w of data.walls) {
+  // How each measured state should read, and how alarming it looks.
+  const STATES = {
+    playing:           ["playing",                  "state-good"],
+    degraded:          ["DEGRADED — running slow",  "state-warn"],
+    reconnecting:      ["reconnecting…",            "state-warn"],
+    starting:          ["starting…",                "state-warn"],
+    idle:              ["idle — nothing loaded",    "state-warn"],
+    no_timepos:        ["no playback position yet", "state-warn"],
+    no_wall:           ["no wall assigned",         "state-off"],
+    watchdog_disabled: ["watchdog disabled",        "state-off"],
+    error:             ["watchdog error",           "state-bad"],
+  };
+
+  const el = document.getElementById("outputs");
+  el.innerHTML = "";
+  for (const o of data.outputs) {
+    let label, cls;
+    if (o.state === "unmonitored") {
+      // Be explicit that this is process-existence, not stream health.
+      label = o.wall ? (o.displaying ? "process running (unmonitored)" : "not running")
+                     : "no wall assigned";
+      cls = !o.wall ? "state-off" : (o.displaying ? "state-warn" : "state-bad");
+    } else {
+      [label, cls] = STATES[o.state] || [o.state, "state-warn"];
+    }
+
+    const rows = [
+      `<div class="wall-row"><span>Wall</span><span>${o.wall || "(unused)"}</span></div>`,
+      `<div class="wall-row"><span>Status</span><span>${label}</span></div>`,
+    ];
+    if (o.rate !== null && o.rate !== undefined) {
+      rows.push(`<div class="wall-row"><span>Playback rate</span><span>${o.rate}× real time${o.strikes ? ` (${o.strikes} slow checks)` : ""}</span></div>`);
+    }
+    if (o.time_pos !== null && o.time_pos !== undefined) {
+      rows.push(`<div class="wall-row"><span>Stream position</span><span>${o.time_pos}s</span></div>`);
+    }
+    if (o.reconnects) {
+      rows.push(`<div class="wall-row"><span>Auto-reconnects</span><span>${o.reconnects}</span></div>`);
+      if (o.last_reason) {
+        rows.push(`<div class="wall-row"><span>Last reason</span><span>${o.last_reason}</span></div>`);
+      }
+    }
+
     const div = document.createElement("div");
-    div.className = "wall-card " + (w.displaying ? "state-good" : "state-warn");
-    div.innerHTML = `
-      <h3>${w.label}</h3>
-      <div class="wall-row"><span>SRT port</span><span>${w.port}</span></div>
-      <div class="wall-row"><span>Status</span><span>${w.displaying ? "displaying" : "not running"}</span></div>
-    `;
-    wallsEl.appendChild(div);
+    div.className = "wall-card " + cls;
+    div.innerHTML = `<h3>${o.label}</h3>` + rows.join("");
+    el.appendChild(div);
   }
 }
 refresh();

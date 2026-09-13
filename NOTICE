@@ -1,0 +1,30 @@
+RaspiDipalys
+Copyright 2026 Miguel Costa
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this project except in compliance with the License. You may obtain a copy of
+the License in the LICENSE file or at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+------------------------------------------------------------------------------
+
+This project incorporates work from the displaycameras-modern project:
+
+    Copyright 2026 Miguel Costa
+    Licensed under the Apache License, Version 2.0
+
+Specifically, the mpv JSON IPC client (common/mpvipc.py) is adapted from that
+project's displaycameras-ipc helper, and the stream watchdog
+(v3-server-pi-webui/pi/bin/videowall-watchdog.py) ports its self-heal detection
+logic and thresholds — frozen and degraded streams identified by comparing
+playback advance against wall-clock time, corrupt streams identified by decoder
+drop-count bursts, the consecutive-strike rule that avoids reconnect thrashing,
+and recovery by in-place reconnect rather than restarting the player.
+
+displaycameras-modern is itself a modernized reimplementation of the
+"displaycameras" project by Anonymousdog:
+
+    https://github.com/Anonymousdog/displaycameras
+
+which is also licensed under the Apache License, Version 2.0.

@@ -8,6 +8,12 @@ Type=simple
 User=videowall-web
 Group=videowall
 WorkingDirectory=/opt/videowall/webui
+# This app's own runtime dir, for the per-wall probe cooldown locks. It can't
+# use the encoders' /run/videowall (owned by the videowall user, mode 0755),
+# and the cooldown must be shared across gunicorn workers, so it needs a
+# writable place of its own. No sudo required.
+RuntimeDirectory=videowall-web
+RuntimeDirectoryMode=0700
 # GUNICORN_BIN is substituted by install.sh (name varies: gunicorn vs gunicorn3).
 ExecStart=GUNICORN_BIN --workers 2 --bind 0.0.0.0:8080 app:app
 Restart=always

@@ -1,0 +1,50 @@
+#!/bin/bash
+# Installed as /usr/local/sbin/videowall-ctl (root-owned, 0755).
+#
+# The single privileged entry point for the web UI. With a fixed pair of walls
+# the sudoers file could enumerate every allowed systemctl invocation exactly;
+# with dynamic wall names it cannot, and a bare
+# "systemctl restart videowall-encode@*.service" wildcard in sudoers is the
+# kind of thing that ages badly. So sudoers allows exactly this script, and
+# ALL validation lives here, in code we control:
+#
+#   - exactly two arguments, nothing more
+#   - the verb must be in a fixed allowlist
+#   - the wall must match a strict slug pattern (no dots, no slashes, so no
+#     path traversal and no systemd unit-name trickery)
+#   - for verbs that start something, the wall must actually be configured
+#
+# Usage: videowall-ctl <start|stop|restart|enable|disable|show> <wall>
+set -euo pipefail
+
+CONF_DIR=/etc/videowall
+SYSTEMCTL=/usr/bin/systemctl
+
+die() { echo "videowall-ctl: $*" >&2; exit 1; }
+
+[ "$#" -eq 2 ] || die "expected exactly 2 arguments, got $#"
+
+VERB="$1"
+WALL="$2"
+
+case "$VERB" in
+  start|stop|restart|enable|disable|show) ;;
+  *) die "unknown verb '$VERB'" ;;
+esac
+
+# Strict slug: lowercase alphanumeric start, then alphanumerics/underscore/
+# hyphen, max 32 chars. Deliberately excludes '.', '/', '@' and whitespace.
+if ! [[ "$WALL" =~ ^[a-z0-9][a-z0-9_-]{0,31}$ ]]; then
+  die "invalid wall name '$WALL'"
+fi
+
+# Starting a wall that has no config would just fail confusingly. Stopping,
+# disabling and showing are allowed without it, so a half-deleted wall can
+# still be cleaned up.
+case "$VERB" in
+  start|restart|enable)
+    [ -f "$CONF_DIR/wall-$WALL.env" ] || die "no such wall configured: $WALL"
+    ;;
+esac
+
+exec "$SYSTEMCTL" "$VERB" "videowall-encode@${WALL}.service"

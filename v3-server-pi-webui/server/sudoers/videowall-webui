@@ -1,9 +1,13 @@
 # Installed as /etc/sudoers.d/videowall-webui by install.sh.
-# Grants the web UI's service account (videowall-web) exactly the commands
-# it needs to apply config changes and report status — nothing else. No
-# wildcards: every allowed invocation is spelled out so this stays
-# auditable.
-videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl restart videowall-encode-4k.service
-videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl restart videowall-encode-1080p.service
-videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl show videowall-encode-4k.service
-videowall-web ALL=(root) NOPASSWD: /usr/bin/systemctl show videowall-encode-1080p.service
+#
+# One line, because the web UI's only privileged need is controlling the
+# templated encoder units — and with dynamic wall names those can't be
+# enumerated here the way the old fixed 4k/1080p pair was.
+#
+# The wildcard is safe because it does not grant arbitrary systemctl access:
+# it grants exactly one root-owned script, and that script validates its verb
+# against an allowlist and its wall name against a strict slug pattern (no
+# dots, slashes or whitespace) before touching systemd. Keep
+# /usr/local/sbin/videowall-ctl root-owned and NOT writable by videowall-web,
+# or this stops being a gate.
+videowall-web ALL=(root) NOPASSWD: /usr/local/sbin/videowall-ctl *
