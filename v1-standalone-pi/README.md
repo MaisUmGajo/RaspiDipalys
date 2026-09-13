@@ -128,13 +128,84 @@ thermal throttling under sustained load is a common silent cause of dropped
 frames on a Pi 4 without a fan/heatsink case, and this appliance runs flat
 out 24/7.
 
+## Video memory (CMA) is a separate limit from decode sessions
+
+Field note from a Pi 4 Model B (Debian 13, `vc4-kms-v3d`) driving two 4K
+panels with thirteen cameras. **Read the caveat at the end before applying
+this to v1** — the deployment measured was not this design.
+
+The obvious thing to worry about on a Pi is decode capacity. The limit that
+actually bit first was **contiguous memory (CMA) for scanout buffers**:
+
+```
+(EE) VK_ERROR_OUT_OF_DEVICE_MEMORY - Failed (re)creating swapchain
+DRM_IOCTL_MODE_CREATE_DUMB failed: Cannot allocate memory
+MESA: error: Failed to create scanout resource
+```
+
+It is not a decode limit, and the proof is that the identical failure occurs
+with `--hwdec=no`. Hardware decode only makes it arrive sooner, because the
+V4L2 capture buffers come out of the same pool.
+
+Numbers from that machine, as a sense of scale:
+
+- `cma-512` gives 512 MB total. Thirteen software-decoded video windows left
+  **63 MB free** — already at the edge.
+- Switching those windows to `hwdec=v4l2m2m-copy` cost roughly **45-50 MB of
+  CMA each**, and only 9 of 13 could start. The rest died on the swapchain.
+- **Window size drives this, not stream resolution.** The second panel was a
+  2x2 being driven at 3840x2160, making each tile 1920x1080. Running that
+  panel at 1920x1080 instead — tiles of 960x540, the same picture on the same
+  screen — freed **135 MB**, taking free CMA from 63 MB to ~200 MB.
+
+So if you are short of video memory, look at how many pixels you are
+*scanning out* before you look at the decoder. Driving a panel at 4K to show
+content that is 1080p or smaller costs 4x the buffers for no visible gain.
+
+### Two traps worth knowing
+
+**`hwdec=auto-safe` silently means software on a Pi.** mpv's "safe" set
+excludes the `v4l2m2m` decoders, so a config that looks like it asks for
+hardware decoding quietly gets none. Confirmed by querying a running mpv over
+its IPC socket: `hwdec-current` came back `no` on all thirteen windows while
+`/dev/video10-12` sat with zero clients. Ask for `v4l2m2m-copy` explicitly
+(which is what `HWDECODE=1` does here) and verify rather than assume.
+
+**Do not raise CMA with `cma=` on the kernel cmdline.** It looks like the way
+to exceed the overlay's `cma-512` ceiling. It is not:
+
+```
+OF: reserved mem: Skipping dt linux,cma-default for "cma=" kernel param.
+cma: Failed to reserve 768 MiB
+Memory: ... 0K cma-reserved
+```
+
+`cma=` makes the kernel **skip the device-tree node entirely**, so it is not
+additive and there is no fallback — if the value cannot be reserved (768 MB
+could not, on a 4 GB Pi 4; CMA has to fit the low DMA zone the VideoCore can
+address) you get **zero** CMA and no display at all. That is a boot-config
+change, so recovering needs physical access to the SD card. `cma-512` on the
+`vc4-kms-v3d` overlay is the practical ceiling; treat it as fixed and reduce
+demand instead.
+
+### Caveat: this was measured on a different design
+
+These numbers come from the separate `displaycameras` project, which runs
+**one mpv window per camera** — thirteen independent `vo=gpu` surfaces. v1
+composites with `xstack` into **one mpv per output**, so it has two windows,
+not thirteen, and correspondingly far less scanout pressure. The mechanism and
+both traps above are real and transferable; the per-window arithmetic is not.
+v1's own decode-session question below remains genuinely open.
+
 ## Notes / things I couldn't verify without the actual hardware
 
 - Exact DRM connector names and whether your specific monitors' EDID needs
   the `cmdline.txt` override — see step 5/6 above.
 - How many concurrent hardware-decode sessions the Pi 4's V4L2 M2M decoder
-  will sustain with your cameras' actual resolutions/bitrates — this is the
-  main open risk in the design and the reason `HWDECODE` and `FPS` are
-  exposed as easy knobs rather than hardcoded.
+  will sustain with your cameras' actual resolutions/bitrates — still open,
+  and the reason `HWDECODE` and `FPS` are exposed as easy knobs rather than
+  hardcoded. Note it is not necessarily the *first* limit you meet: on a
+  related deployment, video memory ran out before decode capacity did — see
+  "Video memory (CMA) is a separate limit from decode sessions" above.
 - Your UniFi Protect RTSP alias URLs are specific to your controller/camera
   configuration and have to be pulled from the Protect UI directly.
