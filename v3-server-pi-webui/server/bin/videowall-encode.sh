@@ -31,7 +31,68 @@ source "$WALL_ENV"
 FPS="${FPS:-15}"
 RTSP_TRANSPORT="${RTSP_TRANSPORT:-tcp}"
 SRT_LATENCY_MS="${SRT_LATENCY_MS:-400}"
+
+# Which encoder to use: none (libx264), vaapi (Intel/AMD) or nvenc (NVIDIA).
+# VAAPI=1 predates this setting and still means HWACCEL=vaapi, so existing
+# /etc/videowall/videowall-server.env files keep working untouched.
 VAAPI="${VAAPI:-0}"
+HWACCEL="${HWACCEL:-}"
+if [ -z "$HWACCEL" ]; then
+  if [ "$VAAPI" = "1" ]; then HWACCEL=vaapi; else HWACCEL=none; fi
+fi
+
+case "$HWACCEL" in
+  none|vaapi|nvenc) ;;
+  *)
+    echo "videowall-encode: HWACCEL must be one of: none, vaapi, nvenc (got '$HWACCEL')" >&2
+    exit 1
+    ;;
+esac
+
+# Check the encoder is actually present in this ffmpeg build. Without this the
+# failure is a wall of ffmpeg output ending in "Unknown encoder", repeated
+# every five seconds by systemd — this says plainly what is wrong instead.
+# Capture the encoder list into a variable and match on it, rather than
+# piping ffmpeg into `grep -q`. Under `set -o pipefail` that pipeline reports
+# FAILURE on success: grep -q exits the moment it matches, ffmpeg is killed by
+# SIGPIPE (141), and pipefail surfaces that as the pipeline's status — so the
+# check concludes the encoder is missing precisely when it is present. Same
+# trap as `tr ... | head -c` in install.sh.
+FFMPEG_ENCODERS="$(ffmpeg -hide_banner -encoders 2>/dev/null || true)"
+
+case "$HWACCEL" in
+  vaapi)
+    case "$FFMPEG_ENCODERS" in
+      *h264_vaapi*) ;;
+      *)
+        echo "videowall-encode: HWACCEL=vaapi but this ffmpeg build has no h264_vaapi encoder." >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  nvenc)
+    case "$FFMPEG_ENCODERS" in
+      *h264_nvenc*) ;;
+      *)
+        echo "videowall-encode: HWACCEL=nvenc but this ffmpeg build has no h264_nvenc encoder." >&2
+        exit 1
+        ;;
+    esac
+    # Debian's ffmpeg lists h264_nvenc even with no NVIDIA driver loaded, so
+    # the check above passes on a machine that has no GPU at all and ffmpeg
+    # then fails later with a much less obvious CUDA error. Check for the
+    # device node too — this is the case you actually hit when a card has not
+    # been passed through to the VM, or the driver did not load.
+    if ! compgen -G "/dev/nvidia[0-9]*" >/dev/null; then
+      echo "videowall-encode: HWACCEL=nvenc but no /dev/nvidia* device is present." >&2
+      echo "                  The NVIDIA driver is not loaded, or the GPU is not visible" >&2
+      echo "                  to this machine (on a VM, check PCI passthrough)." >&2
+      echo "                  Verify with 'nvidia-smi'. Set HWACCEL=none to fall back" >&2
+      echo "                  to software encoding." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 mapfile -t URLS < <(grep -vE '^[[:space:]]*(#|$)' "$CAMERAS_FILE")
 
@@ -58,23 +119,48 @@ CELL_H=$((CELL_H - (CELL_H % 2)))
 # feed a black frame generator in place of any that will not open. That cell
 # goes black and the rest of the wall runs.
 #
-# Probes run in parallel — sequentially, thirteen unreachable cameras at the
-# timeout each would delay startup by minutes.
+# Probes run concurrently, but only PROBE_JOBS at a time, and anything that
+# fails is retried once on its own afterwards.
+#
+# Both limits are there for the same reason: an NVR serving every camera on
+# this wall is a single host, and hitting it with N simultaneous RTSP session
+# setups makes it throttle or refuse them. Observed on a UniFi Protect NVR —
+# nine parallel probes reported three cameras dead that each probed fine in
+# 2-3s on their own, which blacked out three working cells. False negatives
+# here are worse than the failure this whole mechanism exists to avoid, so a
+# source is only declared dead after it has failed a probe it had to itself.
+#
+# Fully sequential probing would be safest but too slow: thirteen unreachable
+# cameras at the timeout each would add minutes to every start.
 PROBE_TIMEOUT_S="${PROBE_TIMEOUT_S:-8}"
+PROBE_JOBS="${PROBE_JOBS:-3}"
 PROBE_DIR="$(mktemp -d)"
 trap 'rm -rf "$PROBE_DIR"' EXIT
 
+probe_one() {
+  timeout "$PROBE_TIMEOUT_S" ffprobe -v error \
+    -rtsp_transport "$RTSP_TRANSPORT" \
+    -select_streams v:0 -show_entries stream=codec_name \
+    -of csv=p=0 "$1" >/dev/null 2>&1
+}
+
 for ((i = 0; i < N; i++)); do
+  while [ "$(jobs -rp | wc -l)" -ge "$PROBE_JOBS" ]; do wait -n; done
   (
-    if timeout "$PROBE_TIMEOUT_S" ffprobe -v error \
-        -rtsp_transport "$RTSP_TRANSPORT" \
-        -select_streams v:0 -show_entries stream=codec_name \
-        -of csv=p=0 "${URLS[$i]}" >/dev/null 2>&1; then
+    if probe_one "${URLS[$i]}"; then
       echo ok > "$PROBE_DIR/$i"
     fi
   ) &
 done
 wait
+
+# Second chance, one at a time, for anything the concurrent pass rejected.
+for ((i = 0; i < N; i++)); do
+  if [ ! -s "$PROBE_DIR/$i" ] && probe_one "${URLS[$i]}"; then
+    echo ok > "$PROBE_DIR/$i"
+    echo "videowall-encode: source $((i + 1)) failed the concurrent probe but succeeded on retry" >&2
+  fi
+done
 
 DEAD_CELLS=()
 LIVE_COUNT=0
@@ -106,12 +192,20 @@ if [ "${#DEAD_CELLS[@]}" -gt 0 ]; then
 fi
 
 FFMPEG_ARGS=(-hide_banner -loglevel warning -nostdin)
-if [ "$VAAPI" = "1" ]; then
-  FFMPEG_ARGS+=(-vaapi_device /dev/dri/renderD128)
+if [ "$HWACCEL" = "vaapi" ]; then
+  FFMPEG_ARGS+=(-vaapi_device "${VAAPI_DEVICE:-/dev/dri/renderD128}")
 fi
 
 for ((i = 0; i < N; i++)); do
   if [ "${SOURCE_OK[i]}" -eq 1 ]; then
+    # NVDEC decodes the camera streams on the GPU as well as encoding there.
+    # Frames still come back to system memory for the xstack mosaic, because
+    # that filter runs on the CPU — so this offloads decoding, not the whole
+    # pipeline. Off by default: it is the encode that dominates at 4K, and a
+    # driver too old for a given camera's stream fails the input outright.
+    if [ "$HWACCEL" = "nvenc" ] && [ "${NVDEC:-0}" = "1" ]; then
+      FFMPEG_ARGS+=(-hwaccel cuda)
+    fi
     FFMPEG_ARGS+=(-rtsp_transport "$RTSP_TRANSPORT" -fflags nobuffer -i "${URLS[$i]}")
   else
     # -re paces this synthetic source at wall-clock speed. Without it lavfi
@@ -141,19 +235,47 @@ for ((i = 0; i < N; i++)); do INPUT_LABELS+="[v$i]"; done
 
 GOP=$((FPS * 2))
 
-if [ "$VAAPI" = "1" ]; then
+# Only VAAPI needs an extra label: its frames have to be uploaded to the GPU
+# after the mosaic is built. NVENC takes ordinary system-memory frames and
+# uploads them itself, so it ends the chain the same way libx264 does.
+if [ "$HWACCEL" = "vaapi" ]; then
   MIX_LABEL="mix"
 else
   MIX_LABEL="out"
 fi
 FILTER+="${INPUT_LABELS}xstack=inputs=${N}:layout=${LAYOUT}:fill=black[${MIX_LABEL}]"
 
-if [ "$VAAPI" = "1" ]; then
-  FILTER+=",format=nv12,hwupload[out]"
-  ENCODE_ARGS=(-c:v h264_vaapi -g "$GOP")
-else
-  ENCODE_ARGS=(-c:v libx264 -preset veryfast -tune zerolatency -profile:v high -pix_fmt yuv420p -g "$GOP" -bf 0)
-fi
+case "$HWACCEL" in
+  vaapi)
+    FILTER+=",format=nv12,hwupload[out]"
+    ENCODE_ARGS=(-c:v h264_vaapi -g "$GOP")
+    ;;
+  nvenc)
+    # p4 is NVENC's middle preset: comfortably realtime for a 4K mosaic on
+    # any NVENC generation while noticeably better quality than p1. tune=ll
+    # (low latency) is the counterpart of libx264's zerolatency, and -bf 0
+    # keeps it consistent with the other two paths — B-frames would add
+    # reordering delay for no benefit on a live wall.
+    #
+    # CBR because this feeds a fixed-bitrate SRT link to the Pi; the
+    # -b:v/-maxrate/-bufsize trio below applies to all three encoders alike.
+    ENCODE_ARGS=(
+      -c:v h264_nvenc
+      -preset "${NVENC_PRESET:-p4}"
+      -tune "${NVENC_TUNE:-ll}"
+      -profile:v high
+      -rc cbr
+      -pix_fmt yuv420p
+      -g "$GOP"
+      -bf 0
+    )
+    # Which GPU, when the box has more than one.
+    [ -n "${NVENC_DEVICE:-}" ] && ENCODE_ARGS+=(-gpu "$NVENC_DEVICE")
+    ;;
+  none)
+    ENCODE_ARGS=(-c:v libx264 -preset veryfast -tune zerolatency -profile:v high -pix_fmt yuv420p -g "$GOP" -bf 0)
+    ;;
+esac
 
 # Periodic machine-readable progress (frame/fps/bitrate/speed) for the web
 # UI to read. Under systemd, /run/videowall is created by RuntimeDirectory=
