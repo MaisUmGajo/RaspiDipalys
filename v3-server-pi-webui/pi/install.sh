@@ -62,6 +62,15 @@ else
   echo "    /etc/videowall/pi.env already exists, leaving it alone"
 fi
 
+# Screen layout lives outside pi.env because the web UI rewrites that file
+# from a fixed template on save and would drop any extra keys.
+if [ ! -f /etc/videowall/display.env ]; then
+  install -m 664 -o root -g "$VW_GROUP" "$REPO_DIR/config/display.env.example" /etc/videowall/display.env
+  echo "    wrote /etc/videowall/display.env (per-output resolutions)"
+else
+  echo "    /etc/videowall/display.env already exists, leaving it alone"
+fi
+
 install -m 644 "$REPO_DIR/home/xinitrc" "$VW_HOME/.xinitrc"
 install -m 644 "$REPO_DIR/home/bash_profile" "$VW_HOME/.bash_profile"
 chown "$VW_USER:$VW_USER" "$VW_HOME/.xinitrc" "$VW_HOME/.bash_profile"
@@ -148,18 +157,24 @@ cat <<'EOF'
    otherwise mpv will just sit retrying the connection every 2s, which is
    harmless but you'll see a black screen until the server is up.
 
-3. Connect both monitors and reboot. The config ships with the connector
-   names a Pi 4 on Bookworm reports (HDMI-A-1 / HDMI-A-2). If one screen
-   stays blank, log in as 'videowall', confirm the actual names with
-   `DISPLAY=:0 xrandr`, and update the ZaphodHeads lines in
-   /etc/X11/xorg.conf.d/10-dualhead.conf to match (older drivers may report
-   plain HDMI-1/HDMI-2).
+3. Set each output's resolution in /etc/videowall/display.env. It ships with
+   3840x2160 for both. Connector names are NOT configured anywhere —
+   ~videowall/.xinitrc asks xrandr which outputs are connected and uses the
+   first as the PORT_4K wall and the second, placed to its right, as the
+   PORT_1080P wall. Swap the two HDMI cables if the walls come up on the
+   wrong screens.
 
-4. If a specific pixel resolution/refresh isn't being picked up
-   automatically via EDID, force it via /boot/firmware/cmdline.txt, e.g.
-   append (all on the existing single line, space-separated):
-     video=HDMI-A-1:3840x2160@30 video=HDMI-A-2:1920x1080@60
-   using whatever connector names you confirmed in step 3.
+   Note this is a single X screen spanning both outputs, with one mpv pinned
+   to each via --fs-screen — not two independent X screens. Zaphod mode does
+   not work on a Pi 4's vc4 driver; see the comments in
+   /etc/X11/xorg.conf.d/10-dualhead.conf.
+
+4. Connect both monitors and reboot. If a screen stays blank or comes up at
+   the wrong resolution, log in as 'videowall' and run `DISPLAY=:0 xrandr` to
+   see what modes that output really offers, then put one of them in
+   display.env. Do not rely on xrandr's --auto here: once a mode has been
+   set, this driver stops advertising a preferred mode and --auto can settle
+   on something far smaller (seen: two 4K panels dropping to 1920x1080).
 
 5. Reboot. The 'videowall' user autologins on tty1 and starts the wall.
 EOF
